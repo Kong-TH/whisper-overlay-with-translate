@@ -3,7 +3,7 @@ FROM docker.io/library/python:3.11-slim-bookworm AS base
 WORKDIR /app
 
 RUN apt-get update -y && \
-  apt-get install -y --no-install-recommends git python3-pip portaudio19-dev && \
+  apt-get install -y --no-install-recommends build-essential git python3-dev python3-pip portaudio19-dev && \
   rm -rf /var/lib/apt/lists/*
 
 COPY realtime-stt-server.py /app/realtime-stt-server.py
@@ -25,7 +25,7 @@ FROM docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS gpu
 WORKDIR /app
 
 RUN apt-get update -y && \
-  apt-get install -y --no-install-recommends git python3 python3-pip libcudnn8 libcudnn8-dev libcublas-12-4 portaudio19-dev && \
+  apt-get install -y --no-install-recommends build-essential git python3 python3-dev python3-pip libcudnn8 libcudnn8-dev libcublas-12-4 portaudio19-dev && \
   rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir torch==2.3.0 torchaudio==2.3.0

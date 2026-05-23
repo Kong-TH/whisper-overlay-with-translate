@@ -192,3 +192,11 @@ used by the overlay.
 - The ONNX backend does not provide word-level probabilities yet, so the client uses plain text rendering.
 - Keep model downloads and conversions out of the dictation hot path.
 - Use smaller models for CPU-only setups unless latency is not important.
+
+## Troubleshooting
+
+If container builds fail while installing `PyAudio` or `webrtcvad` with an error
+like `x86_64-linux-gnu-gcc failed: No such file or directory`, the image is
+missing a native build toolchain. The provided Dockerfile installs
+`build-essential` and `python3-dev` for the CPU and GPU targets because these
+Python packages may need to compile native extensions during `pip install`.
