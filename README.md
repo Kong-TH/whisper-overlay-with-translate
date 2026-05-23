@@ -31,14 +31,20 @@ Requirements:
   cd whisper-overlay
   ```
 
-- Run the realtime-stt-server using docker
+- Run the realtime-stt-server using Docker Compose
   ```
   docker-compose up
   ```
-
-- Install and run whisper-overlay
+  Podman users can use:
   ```
-  cargo install whisper-overlay
+  podman compose up
+  # or, on older systems:
+  podman-compose up
+  ```
+
+- Install and run whisper-overlay from this checkout
+  ```
+  cargo install --path .
   whisper-overlay overlay
   # Or alternatively select a hotkey:
   #whisper-overlay overlay --hotkey KEY_F12
@@ -116,7 +122,7 @@ pip install "optimum[onnxruntime-gpu]" transformers numpy onnxruntime-gpu
 ```
 
 See [Backend and Hardware Matrix](./docs/backend-matrix.md) for CPU, CUDA,
-ONNX, and Docker target guidance.
+ONNX, Docker, Podman, and other container target guidance.
 See [Benchmarking](./docs/benchmark.md) for backend comparison methodology.
 
 #### Client (whisper-overlay)
@@ -144,8 +150,8 @@ Options:
 ### ❄️ 🐳 Docker & cargo
 </summary>
 
-For a quick and simple install, you can run the server using docker and
-install the overlay directly via cargo:
+For a quick and simple install, you can run the server using a compose-compatible
+container runtime and install the overlay directly via cargo:
 
 ```bash
 git clone https://github.com/oddlama/whisper-overlay
@@ -153,9 +159,11 @@ cd whisper-overlay
 
 # Start realtime-stt-server
 docker-compose up
+# Or with Podman:
+# podman compose up
 
-# Install and run overlay
-cargo install whisper-overlay
+# Install and run overlay from this checkout
+cargo install --path .
 whisper-overlay overlay
 ```
 
