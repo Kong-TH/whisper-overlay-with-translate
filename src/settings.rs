@@ -2,8 +2,8 @@ use color_eyre::eyre::{bail, Result};
 use gdk::glib::ExitCode;
 use gtk::prelude::*;
 use gtk::{
-    glib, Adjustment, Application, ApplicationWindow, Button, CheckButton, ComboBoxText, Entry,
-    Grid, Label, Orientation, ScrolledWindow, SpinButton, Stack, StackSidebar,
+    Adjustment, Application, ApplicationWindow, Button, CheckButton, ComboBoxText, Entry, Grid,
+    Label, Orientation, ScrolledWindow, SpinButton, Stack, StackSidebar,
 };
 
 use crate::config::{config_path, load_config, save_config, AppConfig};

@@ -20,51 +20,40 @@ for both the actual realtime and high-fidelity transcription model.
 Requirements:
 
 - A wayland compositor (sway, hyprland, ...)
+- Rust toolchain with `cargo` for building the overlay client
+- Native development packages for GTK 4, gtk4-layer-shell, libevdev, and audio input
 - A GPU with CUDA support is highly recommended, otherwise translation will have a significantly latency even
   on a modern CPU (1 second latency for live transcription and ~5 seconds for the result)
 
 ## 🚀 Quick Start
 
-- Clone the repository
-  ```
-  git clone https://github.com/oddlama/whisper-overlay
-  cd whisper-overlay
-  ```
+This is the shortest path for a local checkout. See [Installation](#-installation)
+for distro packages, container targets, GPU setup, and manual server setup.
 
-- Run the realtime-stt-server using Docker Compose
-  ```
-  docker-compose up
-  ```
-  Podman users can use:
-  ```
-  podman compose up
-  ```
-  The compose default is CPU-only so first-time setup works without NVIDIA
-  container runtime configuration. To use the CUDA image, select the GPU target
-  and run the server with `--device cuda`:
-  ```
-  WHISPER_OVERLAY_DOCKER_TARGET=gpu \
-  WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda" \
-  docker-compose up
-  ```
+```bash
+git clone https://github.com/oddlama/whisper-overlay
+cd whisper-overlay
 
-- Install and run whisper-overlay from this checkout
-  ```
-  cargo install --path .
-  whisper-overlay overlay
-  # Or alternatively select a hotkey:
-  #whisper-overlay overlay --hotkey KEY_F12
-  ```
+# Start the server. The compose default is CPU-only for broad compatibility.
+docker compose up --build
+# or:
+# podman compose up --build
 
-Now press and hold <kbd>Right Ctrl</kbd> to transcribe. For a permanent installation
-I recommend starting the server as a systemd service and adding the `whisper-overlay overlay`
-as a startup command to your desktop environment / compositor.
+# Build and install the overlay client from this checkout.
+# If cargo or native headers are missing, install the client dependencies below first.
+cargo install --path .
+whisper-overlay overlay
+```
 
-You can edit common client/server preferences with the GTK settings window:
+Use the settings UI for common client/server preferences:
 
 ```bash
 whisper-overlay settings
 ```
+
+Now press and hold <kbd>Right Ctrl</kbd> to transcribe. For a permanent installation
+I recommend starting the server as a systemd service and adding the `whisper-overlay overlay`
+as a startup command to your desktop environment / compositor.
 
 Settings are stored in `$XDG_CONFIG_HOME/whisper-overlay/config.toml` or
 `~/.config/whisper-overlay/config.toml` when `XDG_CONFIG_HOME` is unset.
@@ -150,30 +139,119 @@ Options:
 
 ## 📦 Installation
 
-<details>
-<summary>
+The project has two runtime pieces:
 
-### ❄️ 🐳 Docker & cargo
-</summary>
+- `realtime-stt-server.py`: Python speech-to-text server, usually run in a container.
+- `whisper-overlay`: Rust/GTK Wayland client, installed locally with Cargo.
 
-For a quick and simple install, you can run the server using a compose-compatible
-container runtime and install the overlay directly via cargo:
+### 1. Install Client Build Dependencies
+
+The overlay client is a native Rust/GTK application, so `cargo install --path .`
+requires the Rust toolchain and system development headers.
+
+On openSUSE:
 
 ```bash
-git clone https://github.com/oddlama/whisper-overlay
-cd whisper-overlay
+sudo zypper install rustup gcc pkg-config gtk4-devel gtk4-layer-shell-devel libevdev-devel alsa-devel
+rustup default stable
+source "$HOME/.cargo/env"
+```
 
-# Start realtime-stt-server
+Verify the toolchain before building:
+
+```bash
+cargo --version
+rustc --version
+```
+
+On other distributions, install the equivalent packages for:
+
+- Rust and Cargo
+- C compiler toolchain
+- `pkg-config`
+- GTK 4 development headers
+- gtk4-layer-shell development headers
+- libevdev development headers
+- ALSA development headers
+
+### 2. Start The Server With Containers
+
+The default compose setup builds the CPU RealtimeSTT image and starts the server
+on `0.0.0.0:7007`. CPU is slower, but it avoids requiring NVIDIA container
+runtime setup on first launch.
+
+Docker Compose:
+
+```bash
+docker compose up --build
+# or, on older systems:
 docker-compose up --build
-# Or with Podman:
-# podman compose up --build
+```
 
-# Install and run overlay from this checkout
+Podman Compose:
+
+```bash
+podman compose up --build
+# or, on older systems:
+podman-compose up --build
+```
+
+The compose file supports multiple Dockerfile targets through
+`WHISPER_OVERLAY_DOCKER_TARGET`:
+
+| Target | Backend | Use case |
+| --- | --- | --- |
+| `cpu` | RealtimeSTT | CPU-compatible default |
+| `gpu` | RealtimeSTT | NVIDIA CUDA runtime |
+| `onnx-cpu` | ONNX | Experimental CPU ONNX backend |
+| `onnx-gpu` | ONNX | Experimental GPU ONNX backend |
+
+For NVIDIA CUDA:
+
+```bash
+WHISPER_OVERLAY_DOCKER_TARGET=gpu \
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda" \
+docker compose up --build
+```
+
+For Podman GPU, the host must expose NVIDIA devices through CDI/NVIDIA
+Container Toolkit. If `podman compose` does not expose the GPU, use direct
+`podman run --device nvidia.com/gpu=all` as shown in
+[Backend and Hardware Matrix](./docs/backend-matrix.md).
+
+For ONNX CPU:
+
+```bash
+WHISPER_OVERLAY_DOCKER_TARGET=onnx-cpu \
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --backend onnx --onnx-provider cpu" \
+docker compose up --build
+```
+
+See [Backend and Hardware Matrix](./docs/backend-matrix.md) for direct
+`docker`, `podman`, `nerdctl`, GPU, ONNX, and troubleshooting commands.
+
+### 3. Install The Overlay Client
+
+After the server is running, build and install the Rust client from this
+checkout:
+
+```bash
 cargo install --path .
 whisper-overlay overlay
 ```
 
-</details>
+Use a different hotkey if needed:
+
+```bash
+whisper-overlay overlay --hotkey KEY_F12
+```
+
+Open the settings UI:
+
+```bash
+whisper-overlay settings
+```
+
 <details>
 <summary>
 
@@ -223,31 +301,27 @@ You might want to add this.
 ### 🧰 Manually
 </summary>
 
-First, install and start the server:
+Manual setup is useful when developing the Python server without containers.
+For general use, the container setup above is more reproducible.
 
 ```bash
 # Create virtualenv
 python -m venv venv
 source venv/bin/activate
 
-# Install RealtimeSTT (fork)
-# Follow this for GPU support:
-# https://github.com/KoljaB/RealtimeSTT?tab=readme-ov-file#gpu-support-with-cuda-recommended
+# Install RealtimeSTT
 git clone https://github.com/oddlama/RealtimeSTT
 cd RealtimeSTT
 pip install -r requirements.txt
 cd ..
 
 # Run server script
-git clone https://github.com/oddlama/whisper-overlay
-python ./realtime-stt-server.py
+python ./realtime-stt-server.py --device cpu
 ```
 
-Second, start the overlay by tunning the client from source:
+Then build and run the client:
 
 ```bash
-# Clone repository (or reuse the previous checkout)
-git clone https://github.com/oddlama/whisper-overlay
 cargo build --release
 ./target/release/whisper-overlay overlay
 ```

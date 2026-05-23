@@ -1,6 +1,6 @@
 [package]
 name = "whisper-overlay"
-version = "1.0.0"
+version = "1.0.0+tr.1"
 edition = "2021"
 authors = ["oddlama <oddlama@oddlama.org>"]
 description = "A wayland overlay providing speech-to-text functionality for any application via a global push-to-talk hotkey"

@@ -1,4 +1,4 @@
-use color_eyre::eyre::{Context, Result};
+use color_eyre::eyre::{Context, ContextCompat, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
