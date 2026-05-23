@@ -8,7 +8,6 @@ use gtk::gdk::Display;
 use gtk::{glib, Application, ApplicationWindow, Label};
 use gtk::{prelude::*, CssProvider};
 use gtk_layer_shell::{Layer, LayerShell};
-use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,6 +21,7 @@ use tokio_util::codec::LengthDelimitedCodec;
 use crate::cli::{Command, ConnectionOpts};
 use crate::hotkeys::HotkeyEvent;
 use crate::keyboard::spawn_virtual_keyboard;
+use crate::protocol::ModelResult;
 use crate::runtime;
 use crate::util::{recv_message, send_audio_data, send_message};
 
@@ -42,29 +42,6 @@ pub enum UiAction {
 pub enum ConnectionState {
     Connected,
     Disconnected,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Word {
-    #[allow(unused)]
-    begin: f32,
-    #[allow(unused)]
-    end: f32,
-    word: String,
-    probability: f32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Segment {
-    words: Vec<Word>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ModelResult {
-    kind: String,
-    #[allow(unused)]
-    text: String,
-    segments: Vec<Segment>,
 }
 
 async fn connect_whisper(
@@ -244,10 +221,14 @@ async fn handle_connection(
 
                         match message {
                             Ok(message) => {
-                                if message.get("segments").is_some() {
-                                    if message.get("kind") != Some(&json!("result")) {
-                                        // If this is a result message, and we have a running shutdown timer
-                                        // (i.e. we want to disconnect), we use this as the final result.
+                                let is_model_result = matches!(
+                                    message.get("kind").and_then(|x| x.as_str()),
+                                    Some("realtime" | "result")
+                                );
+
+                                if is_model_result {
+                                    if message.get("kind") == Some(&json!("result")) {
+                                        // A final result means the server finished processing the flush request.
                                         if let Some(ref timer) = shutdown_timer {
                                             timer.abort();
                                             shutdown_timer = None;
@@ -540,32 +521,39 @@ fn build_ui(app: &Application, opts: Command) {
                                 .collect::<Vec<String>>()
                                 .join("\n");
 
-                            for (si, segment) in res.segments.iter().enumerate() {
-                                if si != 0 {
-                                    line_markup += "\n";
+                            if res.has_word_segments() {
+                                // Prefer rich word metadata when the backend provides it.
+                                for (si, segment) in res.segments.iter().enumerate() {
+                                    if si != 0 {
+                                        line_markup += "\n";
+                                    }
+
+                                    for (wi, word) in segment.words.iter().enumerate() {
+                                        let color =
+                                            gradient.at(word.probability.unwrap_or(1.0).into());
+                                        let word = if wi == 0 {
+                                            word.word.trim_start()
+                                        } else {
+                                            &word.word
+                                        };
+
+                                        to_type += word;
+                                        line_markup += &format!(
+                                            "<span color=\"{fg}\">{text}</span>",
+                                            fg = color.to_hex_string(),
+                                            text = glib::markup_escape_text(word)
+                                        );
+                                    }
+
+                                    to_type = to_type.trim_end().to_string() + "\n";
                                 }
-
-                                for (wi, word) in segment.words.iter().enumerate() {
-                                    let color = gradient.at(word.probability.into());
-                                    let word = if wi == 0 {
-                                        word.word.trim_start()
-                                    } else {
-                                        &word.word
-                                    };
-
-                                    //let rgba = color.to_rgba8();
-                                    //print!("{}", word.color(Rgb(rgba[0], rgba[1], rgba[2])));
-                                    //let _ = std::io::stdout().flush();
-
-                                    to_type += &word;
-                                    line_markup += &format!(
-                                        "<span color=\"{fg}\">{text}</span>",
-                                        fg = color.to_hex_string(),
-                                        text = glib::markup_escape_text(word)
-                                    );
+                            } else {
+                                // ONNX or other future backends may only provide plain text.
+                                let text = res.fallback_text().trim_end();
+                                if !text.is_empty() {
+                                    to_type = text.to_string() + "\n";
+                                    line_markup = glib::markup_escape_text(text).to_string();
                                 }
-
-                                to_type = to_type.trim_end().to_string() + "\n";
                             }
 
                             if !markup.is_empty() {
@@ -579,7 +567,9 @@ fn build_ui(app: &Application, opts: Command) {
                                 if !to_type.is_empty() {
                                     let _ = virtual_keyboard_sender.send(to_type).await;
                                 }
-                                line_history.push((now, line_markup))
+                                if !line_markup.is_empty() {
+                                    line_history.push((now, line_markup))
+                                }
                             }
                         }
                         Err(e) => eprintln!("error: ignoring invalid model result data: {e}"),

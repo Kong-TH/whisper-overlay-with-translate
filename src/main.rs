@@ -7,6 +7,7 @@ mod app;
 mod cli;
 mod hotkeys;
 mod keyboard;
+mod protocol;
 mod util;
 mod waybar;
 
