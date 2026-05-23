@@ -62,7 +62,8 @@ If you want to change the server settings, it comes with the following options:
 ```bash
 > realtime-stt-server.py --help
 usage: realtime-stt-server.py [-h] [--host HOST] [--port PORT] [--backend {realtime-stt,onnx}] [--device DEVICE] [--model MODEL]
-                              [--model-realtime MODEL_REALTIME] [--language LANGUAGE] [--onnx-model ONNX_MODEL]
+                              [--model-realtime MODEL_REALTIME] [--language LANGUAGE] [--task {transcribe,translate}]
+                              [--target-language TARGET_LANGUAGE] [--onnx-model ONNX_MODEL]
                               [--onnx-provider {auto,cpu,cuda,tensorrt,rocm,openvino}] [--onnx-device ONNX_DEVICE]
                               [--compute-type {auto,fp32,fp16,int8}] [--onnx-export] [--debug]
 
@@ -77,6 +78,10 @@ options:
   --model-realtime MODEL_REALTIME
                         Faster model used to generate live transcriptions [default: 'base']
   --language LANGUAGE   Set the spoken language. Leave empty to auto-detect. [default: '']
+  --task {transcribe,translate}
+                        Whether to transcribe or translate speech when supported [default: 'transcribe']
+  --target-language TARGET_LANGUAGE
+                        Target language for translation-capable backends. Leave empty for backend default [default: '']
   --onnx-model ONNX_MODEL
                         ONNX Whisper model path or Hugging Face model id [default: 'optimum/whisper-tiny.en']
   --onnx-provider {auto,cpu,cuda,tensorrt,rocm,openvino}
@@ -90,7 +95,7 @@ options:
 ```
 
 The `onnx` backend is an experimental final-result backend. It buffers the
-current utterance in memory and transcribes it when the hotkey is released.
+current utterance in memory and transcribes or translates it when the hotkey is released.
 Install the optional runtime dependencies only when using it:
 
 ```bash

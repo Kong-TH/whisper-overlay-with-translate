@@ -2,6 +2,7 @@ import threading
 import time
 
 from .base import TranscriptionEngine
+from ..messages import build_result
 
 
 PROVIDER_PRESETS = {
@@ -64,6 +65,12 @@ class OnnxWhisperEngine(TranscriptionEngine):
             " -> ".join(self.selected_providers),
         )
         self.logger.info("Loading ONNX Whisper model: %s", self.args.onnx_model)
+        if self.args.task == "translate" and self.args.target_language not in ("", "en"):
+            self.logger.warning(
+                "Whisper translation outputs English; target language '%s' is recorded "
+                "in metadata but is not applied by this backend.",
+                self.args.target_language,
+            )
 
         model = ORTModelForSpeechSeq2Seq.from_pretrained(
             self.args.onnx_model,
@@ -100,6 +107,8 @@ class OnnxWhisperEngine(TranscriptionEngine):
         generate_kwargs = {}
         if self.args.language:
             generate_kwargs["language"] = self.args.language
+        if self.args.task:
+            generate_kwargs["task"] = self.args.task
 
         result = self.pipeline(
             {"array": audio, "sampling_rate": 16000},
@@ -108,15 +117,21 @@ class OnnxWhisperEngine(TranscriptionEngine):
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         text = result["text"] if isinstance(result, dict) else str(result)
         self.publish_result(
-            {
-                "kind": "result",
-                "text": text,
-                "segments": [],
-                "backend": self.name,
-                "model": self.args.onnx_model,
-                "onnx_provider": self.selected_providers[0],
-                "timings": {"total_ms": elapsed_ms},
-            }
+            build_result(
+                kind="result",
+                text=text,
+                segments=[],
+                backend=self.name,
+                task=self.args.task,
+                text_role="translated" if self.args.task == "translate" else "source",
+                language=self.args.language,
+                target_language=self.args.target_language,
+                extra={
+                    "model": self.args.onnx_model,
+                    "onnx_provider": self.selected_providers[0],
+                    "timings": {"total_ms": elapsed_ms},
+                },
+            )
         )
 
     def stop(self):

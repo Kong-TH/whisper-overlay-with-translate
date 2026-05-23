@@ -1,6 +1,7 @@
 import threading
 
 from .base import TranscriptionEngine
+from ..messages import build_result
 
 
 class RealtimeSttEngine(TranscriptionEngine):
@@ -16,6 +17,12 @@ class RealtimeSttEngine(TranscriptionEngine):
 
     def initialize(self):
         # Keep model loading inside the engine so future backends can own their setup.
+        if self.args.task == "translate":
+            self.logger.warning(
+                "RealtimeSTT backend does not expose translation controls yet; "
+                "publishing recognized text as source_text."
+            )
+
         if self.args.device == "cpu":
             import torch
 
@@ -55,12 +62,16 @@ class RealtimeSttEngine(TranscriptionEngine):
                     if text == "":
                         continue
                     self.publish_result(
-                        {
-                            "kind": "result",
-                            "text": text,
-                            "segments": self._serialize_segments(segments),
-                            "backend": self.name,
-                        }
+                        build_result(
+                            kind="result",
+                            text=text,
+                            segments=self._serialize_segments(segments),
+                            backend=self.name,
+                            task=self.args.task,
+                            text_role="source",
+                            language=self.args.language,
+                            target_language=self.args.target_language,
+                        )
                     )
             except (OSError, EOFError) as e:
                 self.logger.info(f"recorder thread failed: {e}")
@@ -94,12 +105,16 @@ class RealtimeSttEngine(TranscriptionEngine):
     def _text_detected(self, ts):
         text, segments = ts
         self.publish_result(
-            {
-                "kind": "realtime",
-                "text": text,
-                "segments": self._serialize_segments(segments),
-                "backend": self.name,
-            }
+            build_result(
+                kind="realtime",
+                text=text,
+                segments=self._serialize_segments(segments),
+                backend=self.name,
+                task=self.args.task,
+                text_role="source",
+                language=self.args.language,
+                target_language=self.args.target_language,
+            )
         )
 
     def _serialize_segments(self, segments):

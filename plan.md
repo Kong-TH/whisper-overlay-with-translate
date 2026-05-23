@@ -336,12 +336,20 @@ target_language = ""
 device = "cuda"
 model = "large-v3"
 model_realtime = "base"
+model_source = "builtin"
+custom_model = ""
 
 [onnx]
 model = ""
 provider = "auto"
 device = "auto"
 compute_type = "auto"
+model_source = "builtin"
+custom_model = ""
+
+[models]
+cache_dir = ""
+catalog_url = ""
 ```
 
 Settings UI sections:
@@ -358,9 +366,13 @@ Settings UI sections:
    - Provider selector for ONNX: `auto`, `cpu`, `cuda`, `tensorrt`, `rocm`, `openvino`
 
 3. Model
-   - Main model
+   - Main model preset
    - Realtime model, when supported
    - ONNX model path or model id
+   - Custom model path or Hugging Face model id
+   - Model source selector: built-in preset, downloaded catalog model, local path, or manual model id
+   - Model install/download button for supported remote models
+   - Model cache location and disk usage
    - Compute type: `auto`, `fp32`, `fp16`, `int8`
 
 4. Language and translation
@@ -373,7 +385,54 @@ Settings UI sections:
    - Available ONNX Runtime providers
    - Selected provider chain
    - Whether execution fell back to CPU
+   - Selected model path or model id
+   - Model availability and download status
    - Server connection status
+
+Model management requirements:
+
+- Support manually entering a model id or local model path
+- Provide a curated model list for common Whisper-compatible models
+- Show compatibility metadata before install:
+  - backend support: `realtime-stt`, ONNX, or both
+  - language support: English-only or multilingual
+  - task support: transcribe, translate
+  - recommended hardware: CPU, CUDA, TensorRT, OpenVINO, ROCm
+  - expected size and disk usage
+  - expected quality/speed tier
+- Allow downloading/installing supported remote models by name
+- Keep model downloads outside the hot audio path
+- Never download a model implicitly during dictation without clear user action
+- Validate model existence before saving settings when possible
+- Allow advanced users to bypass the catalog with a manual model id/path
+
+Suggested curated model catalog shape:
+
+```json
+[
+  {
+    "id": "optimum/whisper-tiny.en",
+    "label": "Whisper tiny.en ONNX",
+    "backend": ["onnx"],
+    "languages": ["en"],
+    "tasks": ["transcribe"],
+    "size_mb": 200,
+    "speed": "fast",
+    "quality": "low",
+    "recommended_providers": ["cpu", "cuda"]
+  },
+  {
+    "id": "large-v3",
+    "label": "Whisper large-v3",
+    "backend": ["realtime-stt"],
+    "languages": ["multilingual"],
+    "tasks": ["transcribe", "translate"],
+    "speed": "slow",
+    "quality": "high",
+    "recommended_providers": ["cuda"]
+  }
+]
+```
 
 Implementation tasks:
 
@@ -399,6 +458,14 @@ Implementation tasks:
    - Explain CLI-only usage
    - Explain GUI settings usage
    - Explain how GUI settings interact with external server deployments
+   - Explain model catalog usage and manual model overrides
+
+6. Add model catalog and installation support
+   - Start with a bundled static catalog
+   - Optionally allow refreshing catalog metadata from a documented URL later
+   - Run downloads as background tasks with progress and cancellation
+   - Store models in backend-native caches unless the user chooses a custom cache directory
+   - Surface download errors without modifying the last known working settings
 
 Deliverable:
 
@@ -406,6 +473,7 @@ Deliverable:
 - CLI workflows remain supported
 - Settings are persisted in a documented config file
 - GUI shows diagnostics needed to debug provider selection
+- Users can select, download, or manually enter compatible models from the settings UI
 
 ## Phase 7: Benchmarking and Default Backend Decision
 

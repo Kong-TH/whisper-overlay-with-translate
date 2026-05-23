@@ -31,6 +31,8 @@ pub struct ModelResult {
     pub text: String,
     #[allow(unused)]
     pub translated_text: Option<String>,
+    #[allow(unused)]
+    pub source_text: Option<String>,
     #[serde(default)]
     pub segments: Vec<Segment>,
 }
@@ -38,7 +40,10 @@ pub struct ModelResult {
 impl ModelResult {
     pub fn fallback_text(&self) -> &str {
         if self.text.is_empty() {
-            self.translated_text.as_deref().unwrap_or("")
+            self.translated_text
+                .as_deref()
+                .or(self.source_text.as_deref())
+                .unwrap_or("")
         } else {
             &self.text
         }

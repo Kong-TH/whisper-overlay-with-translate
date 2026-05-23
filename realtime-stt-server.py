@@ -154,6 +154,10 @@ if __name__ == "__main__":
         help="Faster model used to generate live transcriptions [default: 'base']")
     parser.add_argument("--language", type=str, default="",
         help="Set the spoken language. Leave empty to auto-detect. [default: '']")
+    parser.add_argument("--task", type=str, default="transcribe", choices=["transcribe", "translate"],
+        help="Whether to transcribe or translate speech when supported [default: 'transcribe']")
+    parser.add_argument("--target-language", type=str, default="",
+        help="Target language for translation-capable backends. Leave empty for backend default [default: '']")
     parser.add_argument("--onnx-model", type=str, default="optimum/whisper-tiny.en",
         help="ONNX Whisper model path or Hugging Face model id [default: 'optimum/whisper-tiny.en']")
     parser.add_argument("--onnx-provider", type=str, default="auto",
