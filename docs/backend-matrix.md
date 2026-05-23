@@ -7,7 +7,7 @@ This document summarizes the supported server backends and practical setup paths
 | Environment | Backend | Docker target | Provider option | Notes |
 | --- | --- | --- | --- | --- |
 | CPU-only | `realtime-stt` | `cpu` | `--device cpu` | Best compatibility fallback. Latency depends heavily on model size. |
-| NVIDIA CUDA | `realtime-stt` | `gpu` | `--device cuda` | Current default and strongest baseline for realtime transcription. |
+| NVIDIA CUDA | `realtime-stt` | `gpu` | `--device cuda` | Strongest baseline for realtime transcription. Requires NVIDIA container runtime/CDI setup. |
 | ONNX CPU | `onnx` | `onnx-cpu` | `--onnx-provider cpu` | Experimental final-result backend. No realtime partial output yet. |
 | ONNX auto | `onnx` | `onnx-cpu` or `onnx-gpu` | `--onnx-provider auto` | Selects the best available ONNX Runtime provider and falls back to CPU. |
 | ONNX NVIDIA | `onnx` | `onnx-gpu` | `--onnx-provider cuda` | Requires `onnxruntime-gpu` and compatible NVIDIA runtime libraries. |
@@ -17,7 +17,7 @@ This document summarizes the supported server backends and practical setup paths
 
 ## Container Targets
 
-Build the default GPU RealtimeSTT server:
+Build a GPU RealtimeSTT server:
 
 ```bash
 docker build --target gpu -t realtime-stt-server .
@@ -83,10 +83,27 @@ podman compose up --build
 podman-compose up --build
 ```
 
-If you do not want to build the NVIDIA CUDA image, select the CPU target:
+The compose default uses the CPU target and starts the server with
+`--device cpu`. This gives first-time users a working container without NVIDIA
+runtime configuration. To use the CUDA image, select the GPU target and pass
+`--device cuda`. Docker Compose also needs GPU access from the NVIDIA container
+runtime, for example with a local compose override that adds a GPU reservation:
 
 ```bash
-WHISPER_OVERLAY_DOCKER_TARGET=cpu podman compose up --build
+WHISPER_OVERLAY_DOCKER_TARGET=gpu \
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda" \
+docker compose up --build
+```
+
+For Podman, `podman compose` support for GPU device reservations depends on the
+host CDI/NVIDIA Container Toolkit setup and the compose provider. If GPU devices
+are not visible in compose, use direct `podman run --device nvidia.com/gpu=all`
+from the section below.
+
+```bash
+WHISPER_OVERLAY_DOCKER_TARGET=gpu \
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda" \
+podman compose up --build
 ```
 
 nerdctl Compose:
@@ -121,6 +138,9 @@ WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --
 docker-compose up --build
 ```
 
+The compose file runs the command through `sh -c` so overrides with spaces work
+with Docker Compose and Podman Compose.
+
 For NVIDIA GPU ONNX:
 
 ```bash
@@ -134,32 +154,37 @@ docker-compose up --build
 Docker:
 
 ```bash
-docker run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server
+docker run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server \
+  python3 realtime-stt-server.py --host 0.0.0.0 --device cpu
 ```
 
 Podman:
 
 ```bash
-podman run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server
+podman run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server \
+  python3 realtime-stt-server.py --host 0.0.0.0 --device cpu
 ```
 
 nerdctl:
 
 ```bash
-nerdctl run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server
+nerdctl run --rm -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server \
+  python3 realtime-stt-server.py --host 0.0.0.0 --device cpu
 ```
 
 For NVIDIA GPU containers, Docker usually needs the NVIDIA container runtime:
 
 ```bash
-docker run --rm --gpus all -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server
+docker run --rm --gpus all -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server \
+  python3 realtime-stt-server.py --host 0.0.0.0 --device cuda
 ```
 
 Podman GPU setup depends on the host NVIDIA Container Toolkit/CDI configuration.
 When CDI is configured, a typical command is:
 
 ```bash
-podman run --rm --device nvidia.com/gpu=all -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server
+podman run --rm --device nvidia.com/gpu=all -p 7007:7007 -v whisper-overlay-cache:/root/.cache realtime-stt-server \
+  python3 realtime-stt-server.py --host 0.0.0.0 --device cuda
 ```
 
 ## Runtime Diagnostics
@@ -200,3 +225,13 @@ like `x86_64-linux-gnu-gcc failed: No such file or directory`, the image is
 missing a native build toolchain. The provided Dockerfile installs
 `build-essential` and `python3-dev` for the CPU and GPU targets because these
 Python packages may need to compile native extensions during `pip install`.
+
+If Podman Compose prints a command like
+`${WHISPER_OVERLAY_SERVER_COMMAND:-python3: not found`, rebuild with the current
+compose file. The server command must be executed through `sh -c` for compose
+providers that do not handle default environment values with spaces the same way.
+
+If startup fails with `ModuleNotFoundError: No module named 'requests'` while
+importing `faster_whisper`, rebuild with the current Dockerfile. Some
+RealtimeSTT requirement sets do not pull `requests` explicitly, so the container
+targets install it after the upstream requirements file.

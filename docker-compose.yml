@@ -2,21 +2,17 @@ services:
   realtime-stt-server:
     build:
       context: .
-      target: ${WHISPER_OVERLAY_DOCKER_TARGET:-gpu}
+      target: ${WHISPER_OVERLAY_DOCKER_TARGET:-cpu}
     image: realtime-stt-server
     container_name: realtime-stt-server
-    command: ${WHISPER_OVERLAY_SERVER_COMMAND:-python3 realtime-stt-server.py --host 0.0.0.0}
+    command:
+      - sh
+      - -c
+      - ${WHISPER_OVERLAY_SERVER_COMMAND:-python3 realtime-stt-server.py --host 0.0.0.0 --device cpu}
     volumes:
       - cache:/root/.cache
     ports:
       - "7007:7007"
-
-    # if 'gpu' target
-    deploy:
-      resources:
-        reservations:
-          devices:
-          - capabilities: ["gpu"]
 
 volumes:
   cache:

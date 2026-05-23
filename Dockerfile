@@ -18,6 +18,7 @@ FROM base AS cpu
 RUN git clone https://github.com/oddlama/RealtimeSTT && \
   pip3 install --no-cache-dir torch==2.3.0 torchaudio==2.3.0 && \
   pip3 install --no-cache-dir -r RealtimeSTT/requirements.txt && \
+  pip3 install --no-cache-dir requests && \
   cp -va RealtimeSTT/RealtimeSTT /app
 
 FROM docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS gpu
@@ -32,6 +33,7 @@ RUN pip3 install --no-cache-dir torch==2.3.0 torchaudio==2.3.0
 
 RUN git clone https://github.com/oddlama/RealtimeSTT && \
   pip3 install --no-cache-dir -r RealtimeSTT/requirements-gpu.txt && \
+  pip3 install --no-cache-dir requests && \
   cp -va RealtimeSTT/RealtimeSTT /app
 COPY realtime-stt-server.py /app/realtime-stt-server.py
 COPY whisper_overlay_server /app/whisper_overlay_server

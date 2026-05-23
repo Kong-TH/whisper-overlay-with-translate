@@ -38,12 +38,14 @@ Requirements:
   Podman users can use:
   ```
   podman compose up
-  # or, on older systems:
-  podman-compose up
   ```
-  On systems without NVIDIA/CUDA support, select the CPU image:
+  The compose default is CPU-only so first-time setup works without NVIDIA
+  container runtime configuration. To use the CUDA image, select the GPU target
+  and run the server with `--device cuda`:
   ```
-  WHISPER_OVERLAY_DOCKER_TARGET=cpu podman compose up --build
+  WHISPER_OVERLAY_DOCKER_TARGET=gpu \
+  WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda" \
+  docker-compose up
   ```
 
 - Install and run whisper-overlay from this checkout
@@ -162,9 +164,9 @@ git clone https://github.com/oddlama/whisper-overlay
 cd whisper-overlay
 
 # Start realtime-stt-server
-docker-compose up
+docker-compose up --build
 # Or with Podman:
-# podman compose up
+# podman compose up --build
 
 # Install and run overlay from this checkout
 cargo install --path .
