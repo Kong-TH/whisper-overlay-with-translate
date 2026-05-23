@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm AS base
+FROM docker.io/library/python:3.11-slim-bookworm AS base
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ RUN git clone https://github.com/oddlama/RealtimeSTT && \
   pip3 install --no-cache-dir -r RealtimeSTT/requirements.txt && \
   cp -va RealtimeSTT/RealtimeSTT /app
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS gpu
+FROM docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS gpu
 
 WORKDIR /app
 

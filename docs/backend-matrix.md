@@ -23,6 +23,12 @@ Build the default GPU RealtimeSTT server:
 docker build --target gpu -t realtime-stt-server .
 ```
 
+The Dockerfile uses fully qualified base images so Podman does not need to
+prompt for registry selection:
+
+- `docker.io/library/python:3.11-slim-bookworm`
+- `docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04`
+
 Build a CPU RealtimeSTT server:
 
 ```bash
@@ -75,6 +81,12 @@ Podman Compose:
 podman compose up --build
 # or, on older systems:
 podman-compose up --build
+```
+
+If you do not want to build the NVIDIA CUDA image, select the CPU target:
+
+```bash
+WHISPER_OVERLAY_DOCKER_TARGET=cpu podman compose up --build
 ```
 
 nerdctl Compose:

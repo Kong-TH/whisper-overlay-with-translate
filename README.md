@@ -41,6 +41,10 @@ Requirements:
   # or, on older systems:
   podman-compose up
   ```
+  On systems without NVIDIA/CUDA support, select the CPU image:
+  ```
+  WHISPER_OVERLAY_DOCKER_TARGET=cpu podman compose up --build
+  ```
 
 - Install and run whisper-overlay from this checkout
   ```
