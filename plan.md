@@ -775,6 +775,14 @@ Deliverable:
 - Recommended backend table
 - Default backend decision backed by data
 
+Implementation notes:
+
+- Add a black-box benchmark client that uses the same TCP protocol as the overlay
+- Use 16 kHz mono PCM16 WAV fixtures
+- Store benchmark results as JSON
+- Keep manual CPU/GPU utilization notes beside the machine-readable results
+- Do not change backend defaults until measurements exist for CPU, CUDA, and at least one ONNX provider
+
 ## Risks
 
 1. ONNX backend may not provide word-level timestamps/probabilities

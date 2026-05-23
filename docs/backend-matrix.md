@@ -83,6 +83,12 @@ The `onnx` backend logs:
 - model id or path
 - warning when a requested provider cannot be used
 
+## Benchmarking
+
+Use [Benchmarking](./benchmark.md) before changing default backend recommendations.
+The benchmark client measures server result latency through the same TCP protocol
+used by the overlay.
+
 ## Notes
 
 - The ONNX backend currently produces final results after hotkey release.

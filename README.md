@@ -117,6 +117,7 @@ pip install "optimum[onnxruntime-gpu]" transformers numpy onnxruntime-gpu
 
 See [Backend and Hardware Matrix](./docs/backend-matrix.md) for CPU, CUDA,
 ONNX, and Docker target guidance.
+See [Benchmarking](./docs/benchmark.md) for backend comparison methodology.
 
 #### Client (whisper-overlay)
 
