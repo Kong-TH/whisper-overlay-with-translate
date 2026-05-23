@@ -5,9 +5,11 @@ use tokio::runtime::Runtime;
 
 mod app;
 mod cli;
+mod config;
 mod hotkeys;
 mod keyboard;
 mod protocol;
+mod settings;
 mod util;
 mod waybar;
 
@@ -27,6 +29,9 @@ fn main() -> Result<()> {
         }
         command @ cli::Command::Overlay { .. } => {
             app::launch_app(command)?;
+        }
+        cli::Command::Settings => {
+            settings::launch_settings_app()?;
         }
     }
 

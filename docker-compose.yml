@@ -2,9 +2,10 @@ services:
   realtime-stt-server:
     build:
       context: .
-      target: gpu # or cpu
+      target: ${WHISPER_OVERLAY_DOCKER_TARGET:-gpu}
     image: realtime-stt-server
     container_name: realtime-stt-server
+    command: ${WHISPER_OVERLAY_SERVER_COMMAND:-python3 realtime-stt-server.py --host 0.0.0.0}
     volumes:
       - cache:/root/.cache
     ports:

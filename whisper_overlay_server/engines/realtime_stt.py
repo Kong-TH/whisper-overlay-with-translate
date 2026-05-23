@@ -29,6 +29,13 @@ class RealtimeSttEngine(TranscriptionEngine):
             # RealtimeSTT currently chooses CUDA by probing torch directly.
             torch.cuda.is_available = lambda: False
 
+        self.logger.info(
+            "RealtimeSTT settings: device=%s model=%s realtime_model=%s language=%s",
+            self.args.device,
+            self.args.model,
+            self.args.model_realtime,
+            self.args.language or "auto",
+        )
         self.logger.info("Importing RealtimeSTT runtime")
         from RealtimeSTT import AudioToTextRecorder
 

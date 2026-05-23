@@ -14,6 +14,7 @@ pub enum Command {
         #[clap(flatten)]
         connection_opts: ConnectionOpts,
     },
+    Settings,
     Overlay {
         #[clap(flatten)]
         connection_opts: ConnectionOpts,

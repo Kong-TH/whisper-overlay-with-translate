@@ -178,6 +178,13 @@ if __name__ == "__main__":
         logger.setLevel(logging.DEBUG)
         logging.getLogger().setLevel(logging.DEBUG)
 
+    logger.info(
+        "Selected backend=%s task=%s language=%s target_language=%s",
+        args.backend,
+        args.task,
+        args.language or "auto",
+        args.target_language or "backend-default",
+    )
     engine = create_engine(args.backend, args, logger, publish_active_result)
     engine.initialize()
 

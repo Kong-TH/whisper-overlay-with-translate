@@ -389,6 +389,276 @@ Settings UI sections:
    - Model availability and download status
    - Server connection status
 
+Settings UI mockup:
+
+The settings UI should be a compact GTK4 utility window, not a full-screen dashboard. Use a left sidebar for pages and a right content pane for dense form controls. Buttons should use icons where GTK/lucide-equivalent symbols are available, with short labels only for primary actions.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Whisper Overlay Settings                                             [×]    │
+├──────────────────┬───────────────────────────────────────────────────────────┤
+│ General          │ General                                                   │
+│ Backend          │                                                           │
+│ Models           │ Server                                                    │
+│ Language         │  Address                [ localhost:7007              ]   │
+│ Overlay          │  Connection             ● Connected                       │
+│ Diagnostics      │                                                           │
+│                  │ Input                                                     │
+│                  │  Hotkey                 [ KEY_RIGHTCTRL        Record ]   │
+│                  │  Type field             [ text                    ▾ ]     │
+│                  │                                                           │
+│                  │ Overlay                                                   │
+│                  │  Style file             [ /path/style.css      Browse ]   │
+│                  │                                                           │
+│                  │                                [ Revert ] [ Save ]        │
+└──────────────────┴───────────────────────────────────────────────────────────┘
+```
+
+### Page: General
+
+Purpose: everyday settings users are most likely to change.
+
+Controls:
+
+- Server address text field
+- Server connection status indicator
+- Hotkey field with a "Record" button
+- Type field selector:
+  - `text`
+  - `source_text`
+  - `translated_text`
+- Overlay style file chooser
+- Save/Revert buttons
+
+Validation:
+
+- Address must be `host:port`
+- Hotkey must map to an `evdev::Key`
+- If `translated_text` is selected while task is `transcribe`, show a non-blocking warning
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Backend                                                   Active: realtime-stt│
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Backend                                                                   │
+│  Engine                  [ realtime-stt                         ▾ ]         │
+│  Task                    [ transcribe                           ▾ ]         │
+│                                                                            │
+│ RealtimeSTT                                                               │
+│  Device                  [ cuda                                  ▾ ]         │
+│  Main model              [ large-v3                              ▾ ]         │
+│  Realtime model          [ base                                  ▾ ]         │
+│                                                                            │
+│ ONNX Runtime                                                              │
+│  Provider                [ auto                                  ▾ ]         │
+│  Compute type            [ auto                                  ▾ ]         │
+│                                                                            │
+│ Current command                                                            │
+│  realtime-stt-server.py --backend realtime-stt --device cuda ... [ Copy ]  │
+│                                                                            │
+│                                                    [ Revert ] [ Save ]      │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Page: Backend
+
+Purpose: select engine/provider without requiring users to understand every CLI flag.
+
+Controls:
+
+- Backend selector: `realtime-stt`, `onnx`
+- Task selector: `transcribe`, `translate`
+- RealtimeSTT device selector: `auto`, `cpu`, `cuda`
+- ONNX provider selector: `auto`, `cpu`, `cuda`, `tensorrt`, `rocm`, `openvino`
+- ONNX compute type selector: `auto`, `fp32`, `fp16`, `int8`
+- Generated server command preview with copy button
+
+Behavior:
+
+- Show only backend-specific controls for the selected backend
+- Keep advanced fields visible but disabled when not applicable
+- Show a warning if a selected provider is not reported by server capabilities
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Models                                                        Cache: 4.2 GB  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Source       [ Catalog                                        ▾ ] [Refresh] │
+│ Search       [ whisper tiny                                     ]            │
+│                                                                            │
+│ Catalog                                                                    │
+│  ┌─────────────────────────────┬────────┬────────────┬──────────┬────────┐ │
+│  │ Model                       │Backend │ Languages  │ Size     │Status  │ │
+│  ├─────────────────────────────┼────────┼────────────┼──────────┼────────┤ │
+│  │ Whisper tiny.en ONNX        │ONNX    │ English    │ 200 MB   │Install │ │
+│  │ Whisper base ONNX           │ONNX    │ Multi      │ 400 MB   │Ready   │ │
+│  │ Whisper large-v3            │RSTT    │ Multi      │ cache    │Ready   │ │
+│  └─────────────────────────────┴────────┴────────────┴──────────┴────────┘ │
+│                                                                            │
+│ Selected model                                                             │
+│  Id/path                 [ optimum/whisper-tiny.en                    ]    │
+│  Compatibility           ONNX · CPU/CUDA · transcribe                      │
+│  Quality/speed           Fast · Lower accuracy                             │
+│                                                                            │
+│                                            [ Cancel Download ] [ Install ]  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Page: Models
+
+Purpose: make model selection and installation discoverable.
+
+Controls:
+
+- Model source selector:
+  - Catalog
+  - Local path
+  - Manual model id
+- Catalog search field
+- Model table with columns:
+  - model label
+  - backend
+  - language support
+  - task support
+  - size
+  - install status
+- Selected model details panel
+- Install/download/cancel buttons
+- Cache directory chooser
+- Cache size display
+
+Behavior:
+
+- Downloads run in a background task with progress
+- Settings are not saved to a newly selected model until the model is available
+- Manual model ids are allowed but shown as "unverified"
+- Model metadata must make hardware expectations clear before install
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Language and Translation                                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Recognition                                                                 │
+│  Source language         [ Auto detect                            ▾ ]        │
+│                                                                            │
+│ Output                                                                     │
+│  Task                    [ Translate                              ▾ ]        │
+│  Target language         [ English                                ▾ ]        │
+│  Type into apps          [ translated_text                        ▾ ]        │
+│                                                                            │
+│ Notes                                                                      │
+│  Whisper translation currently outputs English. Other target languages      │
+│  require an additional translation backend in a later phase.                │
+│                                                                            │
+│                                                    [ Revert ] [ Save ]      │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Page: Language
+
+Purpose: configure recognition and translation output.
+
+Controls:
+
+- Source language selector:
+  - Auto detect
+  - common ISO language codes
+  - manual code
+- Task selector:
+  - Transcribe
+  - Translate
+- Target language selector
+- Type field selector synchronized with General page
+
+Behavior:
+
+- If backend can only translate to English, make that visible
+- If selected model is English-only, disable incompatible source language choices
+- If selected model does not support translation, disable `translate`
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Overlay                                                                     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Position                                                                    │
+│  Anchor                  [ Bottom                                ▾ ]         │
+│  Bottom margin           [ 200 px                                ]           │
+│  Width                   [ 1600 px                               ]           │
+│                                                                            │
+│ Text                                                                       │
+│  Keep history             [ 6.0 s                                ]           │
+│  Confidence colors        [ enabled                              ]           │
+│  Plain-text fallback      [ enabled                              ]           │
+│                                                                            │
+│ Style                                                                      │
+│  CSS file                [ /path/style.css                       Browse ]   │
+│                                                                            │
+│                                                    [ Revert ] [ Save ]      │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Page: Overlay
+
+Purpose: tune overlay behavior without editing CSS or source code.
+
+Controls:
+
+- Anchor selector
+- Margin/width numeric inputs
+- History duration
+- Confidence color toggle
+- Plain-text fallback toggle
+- CSS file chooser
+
+Behavior:
+
+- Keep defaults identical to current behavior
+- Validate numeric values before save
+- Advanced layout controls can be hidden under an expander initially
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Diagnostics                                                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Server                                                                      │
+│  Status                  ● Connected                                        │
+│  Active backend           onnx                                              │
+│  Model                    optimum/whisper-tiny.en                           │
+│  Task                     translate                                         │
+│                                                                            │
+│ Runtime                                                                     │
+│  ONNX providers           CUDAExecutionProvider, CPUExecutionProvider        │
+│  Selected provider chain  CUDAExecutionProvider → CPUExecutionProvider      │
+│  CPU fallback             no                                                │
+│                                                                            │
+│ Actions                                                                     │
+│  [ Test Connection ] [ Copy Diagnostics ] [ Open Config File ]              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Page: Diagnostics
+
+Purpose: make support/debugging practical for shared users.
+
+Controls:
+
+- Server connection status
+- Active backend
+- Active model
+- Task/language summary
+- ONNX provider list
+- Selected provider chain
+- CPU fallback indicator
+- Test connection button
+- Copy diagnostics button
+- Open config file button
+
+Behavior:
+
+- Diagnostics should come from a status/capabilities message when available
+- Copy output should redact local tokens or credentials if future integrations add them
+- Errors should be shown as actionable text, not raw stack traces
+
 Model management requirements:
 
 - Support manually entering a model id or local model path

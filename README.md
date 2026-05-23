@@ -48,6 +48,15 @@ Now press and hold <kbd>Right Ctrl</kbd> to transcribe. For a permanent installa
 I recommend starting the server as a systemd service and adding the `whisper-overlay overlay`
 as a startup command to your desktop environment / compositor.
 
+You can edit common client/server preferences with the GTK settings window:
+
+```bash
+whisper-overlay settings
+```
+
+Settings are stored in `$XDG_CONFIG_HOME/whisper-overlay/config.toml` or
+`~/.config/whisper-overlay/config.toml` when `XDG_CONFIG_HOME` is unset.
+
 ## ⚙️ Usage
 
 In principle you just need to start `./realtime-stt-server.py` and it will be listening for requests on `localhost:7007`.
@@ -105,6 +114,9 @@ pip install "optimum[onnxruntime]" transformers numpy onnxruntime
 # NVIDIA GPU
 pip install "optimum[onnxruntime-gpu]" transformers numpy onnxruntime-gpu
 ```
+
+See [Backend and Hardware Matrix](./docs/backend-matrix.md) for CPU, CUDA,
+ONNX, and Docker target guidance.
 
 #### Client (whisper-overlay)
 

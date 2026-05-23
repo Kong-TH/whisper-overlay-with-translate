@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use crate::cli::{Command, ConnectionOpts};
+use crate::config::load_config;
 use crate::hotkeys::HotkeyEvent;
 use crate::keyboard::spawn_virtual_keyboard;
 use crate::protocol::ModelResult;
@@ -351,6 +352,8 @@ async fn handle_hotkey(
 }
 
 pub fn launch_app(opts: Command) -> Result<()> {
+    let opts = apply_saved_overlay_config(opts);
+
     // Create a new application
     let app = Application::builder().application_id(APP_ID).build();
 
@@ -369,6 +372,45 @@ pub fn launch_app(opts: Command) -> Result<()> {
     };
 
     Ok(())
+}
+
+fn apply_saved_overlay_config(opts: Command) -> Command {
+    let Ok(config) = load_config() else {
+        return opts;
+    };
+
+    let Command::Overlay {
+        mut connection_opts,
+        style,
+        hotkey,
+    } = opts
+    else {
+        unreachable!("apply_saved_overlay_config is only used for the overlay command");
+    };
+
+    if connection_opts.address == "localhost:7007" && !config.client.address.is_empty() {
+        connection_opts.address = config.client.address;
+    }
+
+    let style = style.or_else(|| {
+        if config.client.style.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(config.client.style))
+        }
+    });
+
+    let hotkey = if hotkey == "KEY_RIGHTCTRL" && !config.client.hotkey.is_empty() {
+        config.client.hotkey
+    } else {
+        hotkey
+    };
+
+    Command::Overlay {
+        connection_opts,
+        style,
+        hotkey,
+    }
 }
 
 fn load_css(style: Option<PathBuf>) {
