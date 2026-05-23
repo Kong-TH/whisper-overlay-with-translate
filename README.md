@@ -61,21 +61,44 @@ If you want to change the server settings, it comes with the following options:
 
 ```bash
 > realtime-stt-server.py --help
-usage: realtime-stt-server.py [-h] [--host HOST] [--port PORT] [--backend {realtime-stt}] [--device DEVICE] [--model MODEL]
-                              [--model-realtime MODEL_REALTIME] [--language LANGUAGE] [--debug]
+usage: realtime-stt-server.py [-h] [--host HOST] [--port PORT] [--backend {realtime-stt,onnx}] [--device DEVICE] [--model MODEL]
+                              [--model-realtime MODEL_REALTIME] [--language LANGUAGE] [--onnx-model ONNX_MODEL]
+                              [--onnx-provider {auto,cpu,cuda,tensorrt,rocm,openvino}] [--onnx-device ONNX_DEVICE]
+                              [--compute-type {auto,fp32,fp16,int8}] [--onnx-export] [--debug]
 
 options:
   -h, --help            show this help message and exit
   --host HOST           The host to listen on [default: 'localhost']
   --port PORT           The port to listen on [default: 7007]
-  --backend {realtime-stt}
+  --backend {realtime-stt,onnx}
                         The transcription backend to use [default: 'realtime-stt']
   --device DEVICE       Device to run the models on, defaults to cuda if available, else cpu [default: 'cuda']
   --model MODEL         Main model used to generate the final transcription [default: 'large-v3']
   --model-realtime MODEL_REALTIME
                         Faster model used to generate live transcriptions [default: 'base']
   --language LANGUAGE   Set the spoken language. Leave empty to auto-detect. [default: '']
+  --onnx-model ONNX_MODEL
+                        ONNX Whisper model path or Hugging Face model id [default: 'optimum/whisper-tiny.en']
+  --onnx-provider {auto,cpu,cuda,tensorrt,rocm,openvino}
+                        ONNX Runtime provider preset [default: 'auto']
+  --onnx-device ONNX_DEVICE
+                        Reserved ONNX device selector for future provider-specific options [default: 'auto']
+  --compute-type {auto,fp32,fp16,int8}
+                        Reserved ONNX compute type selector [default: 'auto']
+  --onnx-export         Export a Transformers checkpoint to ONNX when loading with Optimum [default: unset]
   --debug               Enable debug log output [default: unset]
+```
+
+The `onnx` backend is an experimental final-result backend. It buffers the
+current utterance in memory and transcribes it when the hotkey is released.
+Install the optional runtime dependencies only when using it:
+
+```bash
+# CPU
+pip install "optimum[onnxruntime]" transformers numpy onnxruntime
+
+# NVIDIA GPU
+pip install "optimum[onnxruntime-gpu]" transformers numpy onnxruntime-gpu
 ```
 
 #### Client (whisper-overlay)

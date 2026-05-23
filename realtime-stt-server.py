@@ -144,7 +144,7 @@ if __name__ == "__main__":
         help="The host to listen on [default: 'localhost']")
     parser.add_argument("--port", type=int, default=7007,
         help="The port to listen on [default: 7007]")
-    parser.add_argument("--backend", type=str, default="realtime-stt", choices=["realtime-stt"],
+    parser.add_argument("--backend", type=str, default="realtime-stt", choices=["realtime-stt", "onnx"],
         help="The transcription backend to use [default: 'realtime-stt']")
     parser.add_argument("--device", type=str, default="cuda",
         help="Device to run the models on, defaults to cuda if available, else cpu [default: 'cuda']")
@@ -154,6 +154,18 @@ if __name__ == "__main__":
         help="Faster model used to generate live transcriptions [default: 'base']")
     parser.add_argument("--language", type=str, default="",
         help="Set the spoken language. Leave empty to auto-detect. [default: '']")
+    parser.add_argument("--onnx-model", type=str, default="optimum/whisper-tiny.en",
+        help="ONNX Whisper model path or Hugging Face model id [default: 'optimum/whisper-tiny.en']")
+    parser.add_argument("--onnx-provider", type=str, default="auto",
+        choices=["auto", "cpu", "cuda", "tensorrt", "rocm", "openvino"],
+        help="ONNX Runtime provider preset [default: 'auto']")
+    parser.add_argument("--onnx-device", type=str, default="auto",
+        help="Reserved ONNX device selector for future provider-specific options [default: 'auto']")
+    parser.add_argument("--compute-type", type=str, default="auto",
+        choices=["auto", "fp32", "fp16", "int8"],
+        help="Reserved ONNX compute type selector [default: 'auto']")
+    parser.add_argument("--onnx-export", action="store_true",
+        help="Export a Transformers checkpoint to ONNX when loading with Optimum [default: unset]")
     parser.add_argument("--debug", action="store_true",
         help="Enable debug log output [default: unset]")
 
