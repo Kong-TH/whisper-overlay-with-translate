@@ -154,7 +154,17 @@ On openSUSE:
 ```bash
 sudo zypper install rustup gcc pkg-config gtk4-devel gtk4-layer-shell-devel libevdev-devel alsa-devel
 rustup default stable
-source "$HOME/.cargo/env"
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Add the Cargo binary directory to your shell startup file if `whisper-overlay`
+is not found after `cargo install --path .`. Some distribution-packaged
+`rustup` installs do not create `$HOME/.cargo/env`, so adding
+`$HOME/.cargo/bin` directly is the most portable option:
+
+```bash
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 Verify the toolchain before building:
@@ -237,6 +247,15 @@ checkout:
 
 ```bash
 cargo install --path .
+whisper-overlay overlay
+```
+
+If installation succeeds but the shell prints `whisper-overlay: command not
+found`, refresh the current shell PATH:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+hash -r
 whisper-overlay overlay
 ```
 

@@ -783,6 +783,262 @@ Implementation notes:
 - Keep manual CPU/GPU utilization notes beside the machine-readable results
 - Do not change backend defaults until measurements exist for CPU, CUDA, and at least one ONNX provider
 
+## Phase 8: Live Caption Audio Source Mode
+
+Purpose: add a real live-caption workflow that can transcribe desktop/application audio, while keeping the existing microphone push-to-talk dictation workflow available.
+
+Current behavior:
+
+- Existing overlay captures microphone input through `cpal`
+- Capture starts only while the hotkey is held
+- Final text is typed into the currently focused application
+
+New target behavior:
+
+- Users can select the audio source:
+  - microphone/input device
+  - desktop/system output monitor
+  - specific output sink when the audio stack exposes it
+  - specific application stream when the audio stack exposes stream metadata
+- Users can choose capture mode:
+  - push-to-talk dictation
+  - toggle live caption
+  - always-on live caption
+- Live-caption mode should show captions without typing into the focused app by default
+- Dictation mode should preserve the existing hotkey + text injection behavior
+
+Recommended Linux audio approach:
+
+- Prefer PipeWire for desktop/application audio because modern Wayland desktops commonly route audio through PipeWire
+- Use PulseAudio-compatible monitor sources as an initial fallback path, because many PipeWire systems expose PulseAudio monitor devices
+- Keep `cpal` for microphone input where possible
+- Add a small audio-source abstraction in Rust so UI/app logic does not care whether frames came from a microphone, monitor source, or application stream
+
+Suggested Rust structure:
+
+```text
+src/audio/
+  mod.rs
+  source.rs
+  cpal_input.rs
+  pipewire_monitor.rs
+  pulse_monitor.rs
+```
+
+Suggested config additions:
+
+```toml
+[audio]
+source_kind = "microphone" # microphone | desktop-output | output-device | application
+source_id = "default"
+capture_mode = "push-to-talk" # push-to-talk | toggle-live-caption | always-on-live-caption
+sample_rate = 16000
+channels = 1
+
+[caption]
+type_into_focused_app = false
+show_partial_results = true
+keep_visible_when_idle = true
+idle_hide_seconds = 4.0
+```
+
+Tasks:
+
+1. Add an explicit audio source model
+   - Define `AudioSourceKind`
+   - Define `AudioSourceDescriptor` with id, display name, direction, and optional application metadata
+   - Add device/source enumeration API for settings UI
+
+2. Preserve the existing microphone path
+   - Keep current `cpal` microphone capture behavior working
+   - Move current capture logic behind an audio source trait before adding desktop capture
+
+3. Add desktop output capture
+   - First implementation can target default monitor/source exposed by PipeWire/PulseAudio compatibility
+   - Normalize captured audio to the existing server format: PCM16, mono, 16 kHz
+   - Make resampling explicit if source sample rate differs
+
+4. Add output/application selection where supported
+   - List output sinks when available
+   - List application streams only when the audio backend exposes stable stream metadata
+   - If per-application capture is unavailable, show a clear "not supported by this audio backend" state
+
+5. Add live-caption session state
+   - `push-to-talk`: current behavior
+   - `toggle-live-caption`: tray/menu action starts and stops continuous capture
+   - `always-on-live-caption`: starts capture when the client launches
+   - Avoid typing text into apps unless `caption.type_into_focused_app = true`
+
+6. Add overlay behavior for captions
+   - Caption overlay should remain visible while audio is active
+   - Partial results should update in place
+   - Final results should remain briefly, then fade/hide based on config
+   - Keep dictation overlay behavior unchanged
+
+7. Add settings UI controls
+   - Audio source kind selector
+   - Audio source/device dropdown
+   - Refresh devices button
+   - Capture mode selector
+   - Type-into-focused-app toggle
+   - Show partial results toggle
+   - Idle hide timeout
+
+Deliverable:
+
+- Users can run microphone dictation exactly as before
+- Users can enable live caption for desktop/system audio
+- Settings UI can select input/output source where the host audio backend supports it
+- Unsupported per-app capture cases fail visibly and gracefully
+
+## Phase 9: System Tray and Desktop Status Control
+
+Purpose: make live caption usable as a background desktop utility, not only a terminal-launched overlay.
+
+Requirements:
+
+- Show a tray/status icon when the client is running
+- Indicate state:
+  - disconnected
+  - connected idle
+  - microphone dictation active
+  - live caption active
+  - server/model error
+- Provide tray menu actions:
+  - Start/stop live caption
+  - Toggle microphone dictation availability
+  - Open settings
+  - Open diagnostics
+  - Quit
+
+Design notes:
+
+- Wayland does not have one universal tray API. Prefer a cross-desktop StatusNotifierItem/AppIndicator-compatible implementation if available.
+- Keep Waybar support as a lightweight fallback/status path.
+- The tray should control the same internal state as hotkeys and settings; avoid a separate tray-only state machine.
+
+Suggested structure:
+
+```text
+src/tray.rs
+src/status.rs
+```
+
+Tasks:
+
+1. Add a shared status model
+   - Connection state
+   - Capture mode
+   - Active audio source
+   - Last error
+   - Server/backend/model summary
+
+2. Add tray integration
+   - Create status icon
+   - Update icon/tooltip based on status model
+   - Add menu actions for settings, diagnostics, start/stop caption, quit
+
+3. Connect tray actions to app orchestration
+   - Reuse existing channels/watch state patterns
+   - Keep GTK UI operations on the main thread
+   - Avoid global mutable state
+
+4. Add autostart guidance
+   - Document desktop autostart entry
+   - Document systemd user service option
+
+Deliverable:
+
+- Users can launch once and control live caption from the desktop tray
+- The tray exposes settings and safe start/stop controls without requiring a terminal
+
+## Phase 10: Desktop Installer and Icon Assets
+
+Purpose: package the client so non-developer users can install it as a normal desktop application with launcher and icon support.
+
+Package targets:
+
+- `.rpm` for Fedora/openSUSE/RHEL-family systems
+- `.deb` for Debian/Ubuntu-family systems
+- Keep source/Cargo install documented for developers
+
+Assets supplied by user:
+
+- `/home/kong/Downloads/caption.png`
+- `/home/kong/Downloads/caption.svg`
+
+Preferred asset approach:
+
+- Use SVG as the primary scalable application icon if it is valid and renders correctly
+- Include PNG as fallback or generated raster size if needed by package tooling
+- Copy assets into the repository under an application asset path, for example:
+
+```text
+assets/icons/caption.svg
+assets/icons/caption.png
+```
+
+Desktop integration files:
+
+```text
+packaging/linux/org.oddlama.whisper-overlay.desktop
+packaging/linux/org.oddlama.whisper-overlay.metainfo.xml
+packaging/linux/systemd/whisper-overlay.service
+```
+
+Suggested desktop entry:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Whisper Overlay
+Comment=Live captions and speech-to-text overlay
+Exec=whisper-overlay overlay
+Icon=org.oddlama.whisper-overlay
+Terminal=false
+Categories=Utility;Accessibility;AudioVideo;Audio;
+```
+
+Packaging options to evaluate:
+
+- `cargo-deb` for `.deb`
+- `cargo-generate-rpm` or `cargo-rpm` for `.rpm`
+- `cargo-dist` if it can generate the needed Linux package artifacts cleanly
+- Nix package remains useful but should not be the only install path
+
+Tasks:
+
+1. Import and validate icon assets
+   - Copy `caption.svg` and `caption.png` into repo assets
+   - Verify SVG can be used as an application icon
+   - Generate any required icon sizes only if packaging tools require them
+
+2. Add desktop metadata
+   - `.desktop` launcher
+   - AppStream metadata if package tooling supports it
+   - Install icon into hicolor icon theme path
+
+3. Add package build configuration
+   - `.deb` build
+   - `.rpm` build
+   - Include binary, desktop file, icon, README/license
+
+4. Add optional autostart support
+   - Do not enable autostart by default without user action
+   - Provide documented install command or UI toggle later
+
+5. Document package build and install
+   - Build `.rpm`
+   - Build `.deb`
+   - Install package
+   - Uninstall package
+
+Deliverable:
+
+- A user can install the overlay client with `.rpm` or `.deb`
+- Application launcher and icon appear in desktop menus
+- Future tray/live-caption behavior has the right desktop integration surface
+
 ## Risks
 
 1. ONNX backend may not provide word-level timestamps/probabilities
@@ -800,6 +1056,15 @@ Implementation notes:
 5. Packaging can become complex
    - Mitigation: keep optional dependencies separated by backend
 
+6. Desktop audio capture differs across Linux audio stacks
+   - Mitigation: start with PipeWire/PulseAudio monitor capture, keep microphone path unchanged, and expose unsupported states clearly
+
+7. Per-application audio capture may not be portable
+   - Mitigation: treat application selection as best-effort and fall back to output-device or desktop-output capture
+
+8. Tray APIs vary across Wayland desktops
+   - Mitigation: prefer StatusNotifier/AppIndicator where possible and keep Waybar/status command support
+
 ## Recommended First Implementation Order
 
 1. Fix protocol robustness with Python `recv_exact`
@@ -811,6 +1076,10 @@ Implementation notes:
 7. Add translation mode
 8. Add graphical settings UI and persistent config
 9. Add packaging/docs/benchmarks
+10. Add explicit audio source abstraction
+11. Add desktop/system audio live-caption mode
+12. Add tray controls
+13. Add `.rpm`/`.deb` packaging and desktop icon assets
 
 ## Initial Success Criteria
 
@@ -819,3 +1088,6 @@ Implementation notes:
 - Python server supports backend selection without duplicating socket code
 - ONNX backend can run at least CPU final transcription
 - Documentation explains which backend to use for common hardware setups
+- Users can choose microphone dictation or desktop audio live caption
+- Users can control live caption from a tray/status icon
+- Users can install the client through `.rpm` or `.deb` with a desktop launcher and icon
