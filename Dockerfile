@@ -11,6 +11,7 @@ RUN git clone https://github.com/oddlama/RealtimeSTT
 RUN pip3 install -r RealtimeSTT/requirements-gpu.txt
 RUN cp -va RealtimeSTT/RealtimeSTT /app
 COPY realtime-stt-server.py /app/realtime-stt-server.py
+COPY whisper_overlay_server /app/whisper_overlay_server
 
 EXPOSE 7007
 ENV PYTHONPATH "${PYTHONPATH}:/app"

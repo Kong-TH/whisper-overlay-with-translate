@@ -36,6 +36,13 @@
 
 ## Current Architecture Summary
 
+Current configuration surface:
+
+- Server settings are CLI-only, for example `--host`, `--port`, `--device`, `--model`, `--model-realtime`, and `--language`
+- Client settings are CLI-only, for example `--address`, `--style`, and `--hotkey`
+- There is no graphical settings UI yet
+- Persistent setup currently depends on desktop startup commands, shell scripts, systemd services, Docker Compose, or NixOS configuration
+
 ### Rust Client
 
 Files:
@@ -297,7 +304,110 @@ Deliverable:
 - Users can pick installation path based on hardware
 - Failure modes are easier to diagnose
 
-## Phase 6: Benchmarking and Default Backend Decision
+## Phase 6: Graphical Settings UI
+
+Purpose: make backend, provider, model, translation, and hotkey settings accessible to normal users without editing CLI commands or service files by hand.
+
+Design direction:
+
+- Keep CLI flags as the source of truth for scripting and power users
+- Add a GTK4 settings window in the Rust client for interactive configuration
+- Store user settings in a small config file rather than hardcoding startup commands
+- Keep settings independent from any single backend so `realtime-stt`, ONNX, and future engines can share the same UI surface
+
+Suggested config file:
+
+```toml
+[client]
+address = "localhost:7007"
+hotkey = "KEY_RIGHTCTRL"
+style = ""
+type_field = "text"
+
+[server]
+backend = "realtime-stt"
+host = "localhost"
+port = 7007
+language = ""
+task = "transcribe"
+target_language = ""
+
+[realtime_stt]
+device = "cuda"
+model = "large-v3"
+model_realtime = "base"
+
+[onnx]
+model = ""
+provider = "auto"
+device = "auto"
+compute_type = "auto"
+```
+
+Settings UI sections:
+
+1. General
+   - Server address
+   - Hotkey
+   - Overlay style path
+   - Text field to type: `text`, `translated_text`, or `source_text`
+
+2. Backend
+   - Backend selector: `realtime-stt`, `onnx`
+   - Backend status and detected capabilities
+   - Provider selector for ONNX: `auto`, `cpu`, `cuda`, `tensorrt`, `rocm`, `openvino`
+
+3. Model
+   - Main model
+   - Realtime model, when supported
+   - ONNX model path or model id
+   - Compute type: `auto`, `fp32`, `fp16`, `int8`
+
+4. Language and translation
+   - Source language
+   - Task: transcribe or translate
+   - Target language
+
+5. Diagnostics
+   - Active backend
+   - Available ONNX Runtime providers
+   - Selected provider chain
+   - Whether execution fell back to CPU
+   - Server connection status
+
+Implementation tasks:
+
+1. Add config loading/saving in Rust
+   - Suggested file location: `$XDG_CONFIG_HOME/whisper-overlay/config.toml`
+   - CLI flags should override config values for the current process
+   - Missing config values should fall back to current defaults
+
+2. Add a new CLI subcommand
+   - `whisper-overlay settings`
+   - Opens the GTK4 settings window
+
+3. Add server capability endpoint or status extension
+   - Extend status mode to optionally report backend, provider, model, and capability data
+   - Keep existing Waybar fields backward-compatible
+
+4. Decide how settings apply to the server
+   - Local server managed by the app: settings UI can restart/update it later
+   - External server: settings UI should show generated server command or systemd/Docker hints
+   - Do not silently rewrite user-managed systemd/Docker/Nix files
+
+5. Add documentation
+   - Explain CLI-only usage
+   - Explain GUI settings usage
+   - Explain how GUI settings interact with external server deployments
+
+Deliverable:
+
+- Users can configure common options from a GUI
+- CLI workflows remain supported
+- Settings are persisted in a documented config file
+- GUI shows diagnostics needed to debug provider selection
+
+## Phase 7: Benchmarking and Default Backend Decision
 
 Purpose: avoid choosing ONNX as default based on assumption alone.
 
@@ -353,7 +463,8 @@ Deliverable:
 5. Add `--backend realtime-stt|onnx`
 6. Add minimal ONNX final-transcription backend
 7. Add translation mode
-8. Add packaging/docs/benchmarks
+8. Add graphical settings UI and persistent config
+9. Add packaging/docs/benchmarks
 
 ## Initial Success Criteria
 
@@ -362,4 +473,3 @@ Deliverable:
 - Python server supports backend selection without duplicating socket code
 - ONNX backend can run at least CPU final transcription
 - Documentation explains which backend to use for common hardware setups
-

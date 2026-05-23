@@ -9,46 +9,10 @@ import json
 import logging
 import queue
 import socket
-import struct
-import time
-import sys
 import threading
 
-def send_message(sock, message):
-    message_str = json.dumps(message)
-    message_bytes = message_str.encode("utf-8")
-    message_length = len(message_bytes)
-    sock.sendall(struct.pack("!I", message_length))
-    sock.sendall(message_bytes)
-
-def recv_exact(sock, length):
-    # TCP is a byte stream, so a single recv() call is not guaranteed to fill the frame.
-    chunks = []
-    remaining = length
-    while remaining > 0:
-        chunk = sock.recv(remaining)
-        if not chunk:
-            if remaining == length:
-                return None
-            raise ConnectionError("connection closed while reading framed message")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-def recv_message(sock):
-    length_bytes = recv_exact(sock, 4)
-    if length_bytes is None:
-        return None
-    message_length = struct.unpack("!I", length_bytes)[0]
-    if message_length & 0x80000000 != 0:
-        # Raw audio data
-        message_length &= ~0x80000000
-        message_bytes = recv_exact(sock, message_length)
-        return message_bytes
-
-    message_bytes = recv_exact(sock, message_length)
-    message_str = message_bytes.decode("utf-8")
-    return json.loads(message_str)
+from whisper_overlay_server.engines import create_engine
+from whisper_overlay_server.protocol import recv_message, send_message
 
 class Client:
     def __init__(self, tag, conn):
@@ -63,6 +27,7 @@ class Client:
 clients = {}
 active_client = None
 model_lock = threading.Lock()
+engine = None
 
 def publish(obj, client=None):
     msg = json.dumps(obj)
@@ -76,8 +41,11 @@ def publish(obj, client=None):
 def refresh_status(client=None):
     publish(dict(refresh_status=True), client=client)
 
+def publish_active_result(message):
+    if active_client is not None:
+        active_client.queue.put(message)
+
 def handle_client(conn, addr):
-    global recorder
     global active_client
     tag = f"{addr[0]}:{addr[1]}"
     client = Client(tag, conn)
@@ -116,7 +84,7 @@ def handle_client(conn, addr):
                 client.waiting = False
                 refresh_status()
                 send_message(conn, dict(status="lock acquired"))
-                recorder.start()
+                engine.start()
 
                 def send_queue():
                     try:
@@ -140,16 +108,11 @@ def handle_client(conn, addr):
                             break
 
                         if isinstance(msg, bytes):
-                            recorder.feed_audio(msg)
+                            engine.feed_audio(msg)
                             continue
 
                         if "action" in msg and msg["action"] == "flush":
-                            logger.info(f"{tag} flushing on client request")
-                            # input some silence
-                            for i in range(10):
-                                recorder.feed_audio(bytes(1000))
-                            recorder.stop()
-                            logger.info(f"{tag} flushed")
+                            engine.flush()
                             continue
                         else:
                             logger.info(f"{tag} error in recv: invalid message: {msg}")
@@ -159,7 +122,7 @@ def handle_client(conn, addr):
                 finally:
                     client.queue.put(None)
                     active_client = None
-                    recorder.stop()
+                    engine.stop()
                     sender_thread.join()
     except Exception as e:
         import traceback
@@ -181,6 +144,8 @@ if __name__ == "__main__":
         help="The host to listen on [default: 'localhost']")
     parser.add_argument("--port", type=int, default=7007,
         help="The port to listen on [default: 7007]")
+    parser.add_argument("--backend", type=str, default="realtime-stt", choices=["realtime-stt"],
+        help="The transcription backend to use [default: 'realtime-stt']")
     parser.add_argument("--device", type=str, default="cuda",
         help="Device to run the models on, defaults to cuda if available, else cpu [default: 'cuda']")
     parser.add_argument("--model", type=str, default="large-v3",
@@ -197,67 +162,8 @@ if __name__ == "__main__":
         logger.setLevel(logging.DEBUG)
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # FIXME: workaround until we can update RealtimeSTT to support device params
-    if args.device == "cpu":
-        import torch
-        torch.cuda.is_available = lambda: False
-
-    logger.info("Importing runtime")
-    from RealtimeSTT import AudioToTextRecorder
-
-    def text_detected(ts):
-        text, segments = ts
-        global active_client
-        if active_client is not None:
-            segments = [x._asdict() for x in segments]
-            active_client.queue.put(dict(kind="realtime", text=text, segments=segments))
-
-    recorder_ready = threading.Event()
-    recorder_config = {
-        'init_logging': False,
-        # FIXME: once fixed upstream 'device': args.device,
-
-        'use_microphone': False,
-        'spinner': False,
-        'model': args.model,
-        'return_segments': True,
-        'language': args.language,
-
-        'silero_sensitivity': 0.4,
-        'webrtc_sensitivity': 2,
-        'post_speech_silence_duration': 0.7,
-        'min_length_of_recording': 0.0,
-        'min_gap_between_recordings': 0,
-
-        'enable_realtime_transcription': True,
-        'realtime_processing_pause': 0,
-        'realtime_model_type': args.model_realtime,
-
-        'on_realtime_transcription_stabilized': text_detected,
-    }
-
-    def recorder_thread():
-        global recorder
-        global active_client
-        logger.info("Initializing RealtimeSTT...")
-        recorder = AudioToTextRecorder(**recorder_config)
-        logger.info("AudioToTextRecorder ready")
-        recorder_ready.set()
-        try:
-            while not recorder.is_shut_down:
-                text, segments = recorder.text()
-                if text == "":
-                    continue
-                if active_client is not None:
-                    segments = [x._asdict() for x in segments]
-                    active_client.queue.put(dict(kind="result", text=text, segments=segments))
-        except (OSError, EOFError) as e:
-            logger.info(f"recorder thread failed: {e}")
-            return
-
-    recorder_thread = threading.Thread(target=recorder_thread)
-    recorder_thread.start()
-    recorder_ready.wait()
+    engine = create_engine(args.backend, args, logger, publish_active_result)
+    engine.initialize()
 
     logger.info(f'Starting server on {args.host}:{args.port}')
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -291,6 +197,6 @@ if __name__ == "__main__":
         except (OSError, ConnectionError):
             pass
 
-        recorder.shutdown()
+        engine.shutdown()
 
     logger.info('Server terminated')

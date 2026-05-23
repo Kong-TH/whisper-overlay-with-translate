@@ -61,13 +61,15 @@ If you want to change the server settings, it comes with the following options:
 
 ```bash
 > realtime-stt-server.py --help
-usage: realtime-stt-server.py [-h] [--host HOST] [--port PORT] [--device DEVICE] [--model MODEL]
+usage: realtime-stt-server.py [-h] [--host HOST] [--port PORT] [--backend {realtime-stt}] [--device DEVICE] [--model MODEL]
                               [--model-realtime MODEL_REALTIME] [--language LANGUAGE] [--debug]
 
 options:
   -h, --help            show this help message and exit
   --host HOST           The host to listen on [default: 'localhost']
   --port PORT           The port to listen on [default: 7007]
+  --backend {realtime-stt}
+                        The transcription backend to use [default: 'realtime-stt']
   --device DEVICE       Device to run the models on, defaults to cuda if available, else cpu [default: 'cuda']
   --model MODEL         Main model used to generate the final transcription [default: 'large-v3']
   --model-realtime MODEL_REALTIME

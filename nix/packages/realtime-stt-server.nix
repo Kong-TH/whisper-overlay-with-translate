@@ -21,6 +21,7 @@
 
       installPhase = ''
         install -Dm755 ${../../realtime-stt-server.py} $out/bin/realtime-stt-server
+        cp -r ${../../whisper_overlay_server} $out/bin/whisper_overlay_server
       '';
 
       meta = {
