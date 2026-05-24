@@ -11,6 +11,8 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 #[serde(default)]
 pub struct AppConfig {
     pub client: ClientConfig,
+    pub audio: AudioConfig,
+    pub caption: CaptionConfig,
     pub server: ServerConfig,
     pub realtime_stt: RealtimeSttConfig,
     pub onnx: OnnxConfig,
@@ -22,6 +24,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             client: ClientConfig::default(),
+            audio: AudioConfig::default(),
+            caption: CaptionConfig::default(),
             server: ServerConfig::default(),
             realtime_stt: RealtimeSttConfig::default(),
             onnx: OnnxConfig::default(),
@@ -47,6 +51,50 @@ impl Default for ClientConfig {
             hotkey: "KEY_RIGHTCTRL".to_string(),
             style: String::new(),
             type_field: "text".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    pub source_kind: String,
+    pub source_id: String,
+    pub capture_mode: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            source_kind: "microphone".to_string(),
+            source_id: "default".to_string(),
+            capture_mode: "push-to-talk".to_string(),
+            sample_rate: 16000,
+            channels: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CaptionConfig {
+    pub type_into_focused_app: bool,
+    pub show_partial_results: bool,
+    pub keep_visible_when_idle: bool,
+    pub idle_hide_seconds: f64,
+    pub finalize_interval_seconds: f64,
+}
+
+impl Default for CaptionConfig {
+    fn default() -> Self {
+        Self {
+            type_into_focused_app: false,
+            show_partial_results: true,
+            keep_visible_when_idle: true,
+            idle_hide_seconds: 4.0,
+            finalize_interval_seconds: 6.0,
         }
     }
 }
@@ -169,7 +217,8 @@ pub fn load_config() -> Result<AppConfig> {
 
     let text = fs::read_to_string(&path)
         .wrap_err_with(|| format!("Could not read config file {}", path.display()))?;
-    toml::from_str(&text).wrap_err_with(|| format!("Could not parse config file {}", path.display()))
+    toml::from_str(&text)
+        .wrap_err_with(|| format!("Could not parse config file {}", path.display()))
 }
 
 pub fn save_config(config: &AppConfig) -> Result<PathBuf> {

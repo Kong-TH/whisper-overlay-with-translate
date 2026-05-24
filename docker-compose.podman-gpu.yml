@@ -1,0 +1,19 @@
+services:
+  realtime-stt-server:
+    build:
+      target: ${WHISPER_OVERLAY_DOCKER_TARGET:-gpu}
+    # Podman exposes NVIDIA GPUs through CDI devices when NVIDIA Container
+    # Toolkit has generated /etc/cdi/nvidia.yaml on the host.
+    devices:
+      - nvidia.com/gpu=all
+    # Required on SELinux-style labeled systems when NVIDIA driver files cannot
+    # be relabeled for a rootless Podman container.
+    security_opt:
+      - label=disable
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    command:
+      - sh
+      - -c
+      - ${WHISPER_OVERLAY_SERVER_COMMAND:-python3 realtime-stt-server.py --host 0.0.0.0 --device cuda}

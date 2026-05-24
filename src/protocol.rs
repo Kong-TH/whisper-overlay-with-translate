@@ -50,6 +50,8 @@ impl ModelResult {
     }
 
     pub fn has_word_segments(&self) -> bool {
-        self.segments.iter().any(|segment| !segment.words.is_empty())
+        self.segments
+            .iter()
+            .any(|segment| !segment.words.is_empty())
     }
 }

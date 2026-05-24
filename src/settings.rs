@@ -6,6 +6,8 @@ use gtk::{
     Label, Orientation, ScrolledWindow, SpinButton, Stack, StackSidebar,
 };
 
+use crate::audio::list_audio_sources;
+use crate::audio::AudioSourceKind;
 use crate::config::{config_path, load_config, save_config, AppConfig};
 
 const APP_ID: &str = "org.oddlama.whisper-overlay.settings";
@@ -55,7 +57,11 @@ fn build_ui(app: &Application) {
     stack.add_titled(&models_page(&widgets), Some("models"), "Models");
     stack.add_titled(&language_page(&widgets), Some("language"), "Language");
     stack.add_titled(&overlay_page(&widgets), Some("overlay"), "Overlay");
-    stack.add_titled(&diagnostics_page(&widgets), Some("diagnostics"), "Diagnostics");
+    stack.add_titled(
+        &diagnostics_page(&widgets),
+        Some("diagnostics"),
+        "Diagnostics",
+    );
 
     let sidebar = StackSidebar::builder()
         .stack(&stack)
@@ -66,7 +72,10 @@ fn build_ui(app: &Application) {
     content.append(&sidebar);
     content.append(&stack);
 
-    let status = Label::builder().halign(gtk::Align::Start).hexpand(true).build();
+    let status = Label::builder()
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .build();
     status.set_text(
         &config_path()
             .map(|path| format!("Config: {}", path.display()))
@@ -130,6 +139,11 @@ struct SettingsWidgets {
     hotkey: Entry,
     style: Entry,
     type_field: ComboBoxText,
+    audio_source_kind: ComboBoxText,
+    audio_source: ComboBoxText,
+    capture_mode: ComboBoxText,
+    caption_finalize_interval: SpinButton,
+    type_into_focused_app: CheckButton,
     backend: ComboBoxText,
     task: ComboBoxText,
     realtime_device: ComboBoxText,
@@ -154,11 +168,27 @@ struct SettingsWidgets {
 
 impl SettingsWidgets {
     fn new(config: &AppConfig) -> Self {
+        let source_kind = AudioSourceKind::parse(&config.audio.source_kind)
+            .unwrap_or(AudioSourceKind::Microphone);
         let widgets = Self {
             address: Entry::new(),
             hotkey: Entry::new(),
             style: Entry::new(),
             type_field: combo(&["text", "source_text", "translated_text"]),
+            audio_source_kind: labeled_combo(&[
+                ("microphone", "Microphone"),
+                ("desktop-output", "Desktop audio"),
+                ("output-device", "Speaker/output"),
+                ("application", "Application audio"),
+            ]),
+            audio_source: audio_source_combo(&source_kind, &config.audio.source_id),
+            capture_mode: combo(&[
+                "push-to-talk",
+                "toggle-live-caption",
+                "always-on-live-caption",
+            ]),
+            caption_finalize_interval: spin(0.0, 30.0, 1.0),
+            type_into_focused_app: CheckButton::new(),
             backend: combo(&["realtime-stt", "onnx"]),
             task: combo(&["transcribe", "translate"]),
             realtime_device: combo(&["auto", "cpu", "cuda"]),
@@ -180,6 +210,14 @@ impl SettingsWidgets {
             confidence_colors: CheckButton::new(),
             plain_text_fallback: CheckButton::new(),
         };
+        let source_combo = widgets.audio_source.clone();
+        widgets
+            .audio_source_kind
+            .connect_changed(move |kind_combo| {
+                let source_kind = AudioSourceKind::parse(&combo_text(kind_combo))
+                    .unwrap_or(AudioSourceKind::Microphone);
+                refresh_audio_source_combo(&source_combo, &source_kind, "default");
+            });
         widgets.apply_config(config);
         widgets
     }
@@ -189,6 +227,16 @@ impl SettingsWidgets {
         self.hotkey.set_text(&config.client.hotkey);
         self.style.set_text(&config.client.style);
         set_combo(&self.type_field, &config.client.type_field);
+        set_combo(&self.audio_source_kind, &config.audio.source_kind);
+        let source_kind = AudioSourceKind::parse(&config.audio.source_kind)
+            .unwrap_or(AudioSourceKind::Microphone);
+        refresh_audio_source_combo(&self.audio_source, &source_kind, &config.audio.source_id);
+        set_combo(&self.audio_source, &config.audio.source_id);
+        set_combo(&self.capture_mode, &config.audio.capture_mode);
+        self.caption_finalize_interval
+            .set_value(config.caption.finalize_interval_seconds);
+        self.type_into_focused_app
+            .set_active(config.caption.type_into_focused_app);
         set_combo(&self.backend, &config.server.backend);
         set_combo(&self.task, &config.server.task);
         set_combo(&self.realtime_device, &config.realtime_stt.device);
@@ -203,7 +251,8 @@ impl SettingsWidgets {
         self.cache_dir.set_text(&config.models.cache_dir);
         self.catalog_url.set_text(&config.models.catalog_url);
         self.source_language.set_text(&config.server.language);
-        self.target_language.set_text(&config.server.target_language);
+        self.target_language
+            .set_text(&config.server.target_language);
         set_combo(&self.overlay_anchor, &config.overlay.anchor);
         self.overlay_bottom_margin
             .set_value(config.overlay.bottom_margin.into());
@@ -223,6 +272,17 @@ impl SettingsWidgets {
                 hotkey: self.hotkey.text().to_string(),
                 style: self.style.text().to_string(),
                 type_field: combo_text(&self.type_field),
+            },
+            audio: crate::config::AudioConfig {
+                source_kind: combo_text(&self.audio_source_kind),
+                source_id: combo_text(&self.audio_source),
+                capture_mode: combo_text(&self.capture_mode),
+                ..crate::config::AudioConfig::default()
+            },
+            caption: crate::config::CaptionConfig {
+                type_into_focused_app: self.type_into_focused_app.is_active(),
+                finalize_interval_seconds: self.caption_finalize_interval.value(),
+                ..crate::config::CaptionConfig::default()
             },
             server: crate::config::ServerConfig {
                 backend: combo_text(&self.backend),
@@ -279,9 +339,28 @@ fn general_page(widgets: &SettingsWidgets) -> ScrolledWindow {
     let grid = form_grid();
     add_entry_row(&grid, 0, "Server address", &widgets.address);
     add_entry_row(&grid, 1, "Hotkey", &widgets.hotkey);
-    add_combo_row(&grid, 2, "Type field", &widgets.type_field);
-    add_entry_row(&grid, 3, "Style file", &widgets.style);
-    add_note(&grid, 4, "Use host:port for the server address. Hotkey names follow evdev::Key.");
+    add_combo_row(&grid, 2, "Text to insert", &widgets.type_field);
+    add_combo_row(&grid, 3, "Audio input", &widgets.audio_source_kind);
+    add_combo_row(&grid, 4, "Device or app", &widgets.audio_source);
+    add_combo_row(&grid, 5, "Capture mode", &widgets.capture_mode);
+    add_spin_row(
+        &grid,
+        6,
+        "Finalize captions every",
+        &widgets.caption_finalize_interval,
+    );
+    add_check_row(
+        &grid,
+        7,
+        "Type live captions into focused app",
+        &widgets.type_into_focused_app,
+    );
+    add_entry_row(&grid, 8, "Style file", &widgets.style);
+    add_note(
+        &grid,
+        9,
+        "Device choices are filtered by the selected audio input. Application audio needs a PipeWire/PulseAudio stream backend and may not appear yet.",
+    );
     scroll(grid)
 }
 
@@ -343,7 +422,12 @@ fn overlay_page(widgets: &SettingsWidgets) -> ScrolledWindow {
     add_spin_row(&grid, 2, "Width", &widgets.overlay_width);
     add_spin_row(&grid, 3, "Keep history seconds", &widgets.overlay_history);
     add_check_row(&grid, 4, "Confidence colors", &widgets.confidence_colors);
-    add_check_row(&grid, 5, "Plain-text fallback", &widgets.plain_text_fallback);
+    add_check_row(
+        &grid,
+        5,
+        "Plain-text fallback",
+        &widgets.plain_text_fallback,
+    );
     scroll(grid)
 }
 
@@ -351,7 +435,12 @@ fn diagnostics_page(widgets: &SettingsWidgets) -> ScrolledWindow {
     let grid = form_grid();
     add_readonly_row(&grid, 0, "Server status", "Not connected from settings UI");
     add_readonly_row(&grid, 1, "Backend", &combo_text(&widgets.backend));
-    add_readonly_row(&grid, 2, "ONNX provider", &combo_text(&widgets.onnx_provider));
+    add_readonly_row(
+        &grid,
+        2,
+        "ONNX provider",
+        &combo_text(&widgets.onnx_provider),
+    );
     add_readonly_row(&grid, 3, "Model", &widgets.onnx_model.text());
     add_note(
         &grid,
@@ -437,6 +526,105 @@ fn combo(values: &[&str]) -> ComboBoxText {
     }
     combo.set_active(Some(0));
     combo
+}
+
+fn labeled_combo(values: &[(&str, &str)]) -> ComboBoxText {
+    let combo = ComboBoxText::new();
+    for (id, label) in values {
+        combo.append(Some(id), label);
+    }
+    combo.set_active(Some(0));
+    combo
+}
+
+fn audio_source_combo(source_kind: &AudioSourceKind, current_source_id: &str) -> ComboBoxText {
+    let combo = ComboBoxText::new();
+    refresh_audio_source_combo(&combo, source_kind, current_source_id);
+    combo
+}
+
+fn refresh_audio_source_combo(
+    combo: &ComboBoxText,
+    source_kind: &AudioSourceKind,
+    current_source_id: &str,
+) {
+    combo.remove_all();
+    combo.append(Some("default"), default_audio_source_label(source_kind));
+
+    let mut matched_count = 0;
+    match list_audio_sources() {
+        Ok(sources) => {
+            for source in sources {
+                if !audio_source_matches(source_kind, &source.kind) {
+                    continue;
+                }
+
+                let label = format!(
+                    "{}: {}{}",
+                    audio_source_kind_label(&source.kind),
+                    source.name,
+                    if source.is_default { " (default)" } else { "" }
+                );
+                combo.append(Some(&source.id), &label);
+                matched_count += 1;
+            }
+        }
+        Err(err) => {
+            eprintln!("warning: could not load audio source list for settings: {err:#}");
+        }
+    }
+
+    if !current_source_id.is_empty() && combo.set_active_id(Some(current_source_id)) {
+        return;
+    }
+
+    if !current_source_id.is_empty() && current_source_id != "default" {
+        combo.append(
+            Some(current_source_id),
+            &format!("Manual: {current_source_id}"),
+        );
+        combo.set_active_id(Some(current_source_id));
+    } else {
+        combo.set_active(Some(0));
+    }
+
+    if matched_count == 0
+        && matches!(
+            source_kind,
+            AudioSourceKind::DesktopOutput
+                | AudioSourceKind::OutputDevice
+                | AudioSourceKind::Application
+        )
+    {
+        combo.append(Some("unsupported"), "No matching source found");
+    }
+}
+
+fn audio_source_matches(selected: &AudioSourceKind, actual: &AudioSourceKind) -> bool {
+    match selected {
+        AudioSourceKind::Microphone => actual == &AudioSourceKind::Microphone,
+        AudioSourceKind::DesktopOutput => actual == &AudioSourceKind::DesktopOutput,
+        AudioSourceKind::OutputDevice => actual == &AudioSourceKind::OutputDevice,
+        AudioSourceKind::Application => actual == &AudioSourceKind::Application,
+    }
+}
+
+fn default_audio_source_label(source_kind: &AudioSourceKind) -> &'static str {
+    match source_kind {
+        AudioSourceKind::Microphone => "Default microphone",
+        AudioSourceKind::DesktopOutput => "Default desktop audio",
+        AudioSourceKind::OutputDevice => "Default output device",
+        AudioSourceKind::Application => "Default application",
+    }
+}
+
+fn audio_source_kind_label(source_kind: &AudioSourceKind) -> &'static str {
+    match source_kind {
+        AudioSourceKind::Microphone => "Microphone",
+        AudioSourceKind::DesktopOutput => "Desktop audio",
+        AudioSourceKind::OutputDevice => "Output",
+        AudioSourceKind::Application => "Application",
+    }
 }
 
 fn set_combo(combo: &ComboBoxText, value: &str) {

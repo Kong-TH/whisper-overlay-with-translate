@@ -114,6 +114,10 @@ def handle_client(conn, addr):
                         if "action" in msg and msg["action"] == "flush":
                             engine.flush()
                             continue
+                        elif "action" in msg and msg["action"] == "flush_continue":
+                            engine.flush()
+                            engine.start()
+                            continue
                         else:
                             logger.info(f"{tag} error in recv: invalid message: {msg}")
                             continue

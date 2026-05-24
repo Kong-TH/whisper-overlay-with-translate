@@ -131,11 +131,98 @@ It has the following options:
 Usage: whisper-overlay overlay [OPTIONS]
 
 Options:
-  -a, --address <ADDRESS>  The address of the the whisper streaming instance (host:port) [default: localhost:7007]
-  -s, --style <STYLE>      An optional stylesheet for the overlay, which replaces the internal style
-      --hotkey <HOTKEY>    Specifies the hotkey to activate voice input. You can use any key or button name from [evdev::Key](https://docs.rs/evdev/latest/evdev/struct.Key.html) [default: KEY_RIGHTCTRL]
+  -a, --address <ADDRESS>
+          The address of the the whisper streaming instance (host:port) [default: localhost:7007]
+  -s, --style <STYLE>
+          An optional stylesheet for the overlay, which replaces the internal style
+      --hotkey <HOTKEY>
+          Specifies the hotkey to activate voice input. You can use any key or button name from [evdev::Key](https://docs.rs/evdev/latest/evdev/struct.Key.html) [default: KEY_RIGHTCTRL]
+      --audio-source-kind <AUDIO_SOURCE_KIND>
+          Audio source kind to capture. Desktop/application capture depends on host audio backend support [default: microphone]
+      --audio-source <AUDIO_SOURCE>
+          Audio source id or device name. Use `whisper-overlay audio-sources` to list visible sources [default: default]
+      --capture-mode <CAPTURE_MODE>
+          Capture mode: push-to-talk, toggle-live-caption, or always-on-live-caption [default: push-to-talk]
+      --type-into-focused-app
+          Type final captions into the focused app. Defaults to dictation-only behavior
+      --no-text-injection
+          Disable text injection even in push-to-talk dictation mode
+      --caption-finalize-interval <CAPTION_FINALIZE_INTERVAL>
+          Seconds between finalization passes in live-caption modes. Set 0 to disable [default: 6]
   -h, --help               Print help
 ```
+
+List audio sources visible to the host audio backend:
+
+```bash
+whisper-overlay audio-sources
+```
+
+Probe visible sources to see which one is currently carrying real audio:
+
+```bash
+whisper-overlay audio-sources --probe
+```
+
+Sources with `peak_rms` close to `0.0000` are effectively silent during the
+probe window. Start playback first, then run the probe again to find the monitor
+source that carries desktop audio.
+
+The default capture mode is microphone push-to-talk dictation. The settings UI
+shows user-facing audio choices such as Microphone, Desktop audio, Speaker/output,
+and Application audio, then filters the device dropdown for that choice.
+Live-caption modes keep the overlay active for captions and do not type into the
+focused app unless `--type-into-focused-app` is passed.
+
+```bash
+# Existing behavior: hold the hotkey and dictate from the default microphone.
+whisper-overlay overlay
+
+# Toggle live captions from the default microphone with the hotkey.
+whisper-overlay overlay --capture-mode toggle-live-caption
+
+# Try desktop/system audio when the audio backend exposes a monitor source.
+whisper-overlay overlay \
+  --audio-source-kind desktop-output \
+  --audio-source default \
+  --capture-mode toggle-live-caption
+
+# Select a specific visible source by id/name from `audio-sources`.
+whisper-overlay overlay \
+  --audio-source-kind desktop-output \
+  --audio-source "pulse:easyeffects_sink.monitor" \
+  --capture-mode always-on-live-caption
+```
+
+Live-caption modes periodically ask the server to finalize the current segment
+and continue listening. This gives the slower, more accurate final model a chance
+to correct the fast realtime preview:
+
+```bash
+whisper-overlay overlay \
+  --audio-source-kind desktop-output \
+  --audio-source "pulse:easyeffects_sink.monitor" \
+  --capture-mode always-on-live-caption \
+  --caption-finalize-interval 6
+```
+
+Lower intervals produce updates sooner but may cut sentences too aggressively.
+Higher intervals preserve longer context but increase delay. Set
+`--caption-finalize-interval 0` to use realtime preview only.
+
+Desktop and per-application capture depend on the host audio stack. PipeWire or
+PulseAudio monitor sources are the most portable first path on modern Linux
+desktops. If `audio-sources` does not show a monitor/source for the sound you
+want, expose a monitor/loopback source in the system audio settings first.
+
+Some ALSA/PipeWire setups print ALSA errors while probing devices, for example
+`unable to open slave` or `Found no matching channel map`. These messages are
+not always fatal. If the overlay later prints `Input device: ...`, audio capture
+opened successfully. If live caption repeatedly outputs a short phrase such as
+`thank you` while no useful audio is playing, it is usually a silence/hallucination
+case or the wrong source was selected. List sources again and choose a real
+monitor source; the client also drops very quiet PCM chunks before sending audio
+to the server.
 
 ## 📦 Installation
 
@@ -228,6 +315,66 @@ For Podman GPU, the host must expose NVIDIA devices through CDI/NVIDIA
 Container Toolkit. If `podman compose` does not expose the GPU, use direct
 `podman run --device nvidia.com/gpu=all` as shown in
 [Backend and Hardware Matrix](./docs/backend-matrix.md).
+
+Check whether Podman can see the GPU before starting the server:
+
+```bash
+podman run --rm --device nvidia.com/gpu=all --security-opt=label=disable docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+```
+
+If that prints the GPU table, start the CUDA server with the Podman GPU
+override:
+
+```bash
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda --model medium --model-realtime small" \
+podman compose -f docker-compose.yml -f docker-compose.podman-gpu.yml up --build
+```
+
+The server is using CUDA when startup logs include `device=cuda`, for example:
+
+```text
+INFO RealtimeSTT settings: device=cuda model=medium realtime_model=small language=auto
+INFO AudioToTextRecorder ready
+INFO Server ready to accept connections
+```
+
+During the first model download, Hugging Face may warn about unauthenticated
+requests. Set `HF_TOKEN` in the server environment if you need higher rate
+limits or more reliable model downloads.
+
+If the test command cannot find `nvidia.com/gpu=all`, install/configure NVIDIA
+Container Toolkit for Podman and generate NVIDIA CDI devices, for example:
+
+```bash
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+```
+
+On openSUSE, install the NVIDIA Container Toolkit from NVIDIA's CUDA repository
+first when `nvidia-ctk` is not available:
+
+```bash
+sudo zypper addrepo https://developer.download.nvidia.com/compute/cuda/repos/suse16/x86_64/ cuda
+sudo zypper refresh
+sudo zypper install -y nvidia-container-toolkit
+```
+
+The package normally regenerates the CDI specification during installation. If
+the Podman GPU test still fails, regenerate it manually and verify that the CDI
+device exists:
+
+```bash
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+nvidia-ctk cdi list
+podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+```
+
+If the test prints `Failed to initialize NVML: Insufficient Permissions`, retry
+with `--security-opt=label=disable`. The included
+`docker-compose.podman-gpu.yml` override already sets this option:
+
+```bash
+podman run --rm --device nvidia.com/gpu=all --security-opt=label=disable docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+```
 
 For ONNX CPU:
 

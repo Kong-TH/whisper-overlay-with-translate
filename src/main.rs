@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 mod app;
+mod audio;
 mod cli;
 mod config;
 mod hotkeys;
@@ -32,6 +33,33 @@ fn main() -> Result<()> {
         }
         cli::Command::Settings => {
             settings::launch_settings_app()?;
+        }
+        cli::Command::AudioSources { probe } => {
+            let sources = audio::list_audio_sources()?;
+            if sources.is_empty() {
+                eprintln!(
+                    "No input or monitor sources were reported by the current audio backend."
+                );
+            }
+            for source in sources {
+                let level = if probe {
+                    match audio::probe_audio_source(&source) {
+                        Ok(rms) => format!("\tpeak_rms={rms:.4}"),
+                        Err(err) => format!("\tprobe_error={err}"),
+                    }
+                } else {
+                    String::new()
+                };
+                let default_marker = if source.is_default { " default" } else { "" };
+                println!(
+                    "{}\t{}\t{}{}{}",
+                    source.kind.as_str(),
+                    source.id,
+                    source.name,
+                    default_marker,
+                    level
+                );
+            }
         }
     }
 

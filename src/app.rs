@@ -1,5 +1,4 @@
 use color_eyre::eyre::{bail, Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::StreamExt;
 use gdk::glib::ExitCode;
 use gdk_wayland::{prelude::*, WaylandSurface};
@@ -18,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::codec::LengthDelimitedCodec;
 
+use crate::audio::{spawn_audio_capture, AudioCaptureConfig, AudioSourceKind};
 use crate::cli::{Command, ConnectionOpts};
 use crate::config::load_config;
 use crate::hotkeys::HotkeyEvent;
@@ -43,6 +43,26 @@ pub enum UiAction {
 pub enum ConnectionState {
     Connected,
     Disconnected,
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+enum CaptureMode {
+    PushToTalk,
+    ToggleLiveCaption,
+    AlwaysOnLiveCaption,
+}
+
+impl CaptureMode {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "push-to-talk" => Ok(Self::PushToTalk),
+            "toggle-live-caption" => Ok(Self::ToggleLiveCaption),
+            "always-on-live-caption" => Ok(Self::AlwaysOnLiveCaption),
+            other => bail!(
+                "Unsupported capture mode '{other}'. Expected push-to-talk, toggle-live-caption, or always-on-live-caption"
+            ),
+        }
+    }
 }
 
 async fn connect_whisper(
@@ -74,6 +94,9 @@ async fn handle_connection(
     mut connection_receiver: watch::Receiver<ConnectionState>,
     ui_sender: mpsc::Sender<UiAction>,
     connection_opts: ConnectionOpts,
+    audio_config: AudioCaptureConfig,
+    capture_mode: CaptureMode,
+    caption_finalize_interval: Duration,
 ) {
     ui_sender.send(UiAction::Disconnected(None)).await.unwrap();
 
@@ -84,50 +107,20 @@ async fn handle_connection(
     let audio_active = Arc::new(Mutex::new(false));
     let audio_active_2 = audio_active.clone();
 
-    let audio_thread = std::thread::spawn(move || {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .expect("No input device available");
+    let audio_thread = spawn_audio_capture(
+        audio_config,
+        bytes_2,
+        audio_tx,
+        audio_active_2,
+        audio_shutdown_rx,
+    );
 
-        println!("Input device: {}", device.name().unwrap());
-
-        let config = cpal::StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(16000),
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        let err_fn = move |err| {
-            eprintln!("an error occurred on the audio stream: {}", err);
-        };
-
-        let stream = device
-            .build_input_stream(
-                &config,
-                move |data: &[i16], _: &_| {
-                    if !*audio_active_2.lock().expect("Could not lock audio stop") {
-                        // BUG: https://github.com/RustAudio/cpal/issues/771
-                        return;
-                    }
-                    bytes_2
-                        .lock()
-                        .expect("Could not lock mutex to write audio data")
-                        .extend_from_slice(bytemuck::cast_slice(data));
-                    let _ = audio_tx.send(());
-                },
-                err_fn,
-                None,
-            )
-            .expect("Failed to build audio input stream");
-
-        stream.play().expect("Failed to start audio stream");
-        let _ = audio_shutdown_rx.recv();
-    });
-
+    let mut first_iteration = true;
     loop {
         {
-            if connection_receiver.changed().await.is_err() {
+            if first_iteration {
+                first_iteration = false;
+            } else if connection_receiver.changed().await.is_err() {
                 break;
             }
 
@@ -202,6 +195,12 @@ async fn handle_connection(
             *audio_active.lock().expect("Could not lock audio stop") = true;
 
             let mut shutdown_timer: Option<JoinHandle<()>> = None;
+            let mut caption_finalize_tick =
+                if capture_mode == CaptureMode::PushToTalk || caption_finalize_interval.is_zero() {
+                    None
+                } else {
+                    Some(Box::pin(tokio::time::sleep(caption_finalize_interval)))
+                };
             let mut read_message_frame = LengthDelimitedCodec::builder()
                 .length_field_offset(0) // default value
                 .length_field_length(4)
@@ -272,6 +271,24 @@ async fn handle_connection(
                             break;
                         }
                     }
+                    _ = async {
+                        if let Some(tick) = caption_finalize_tick.as_mut() {
+                            tick.as_mut().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if capture_mode != CaptureMode::PushToTalk && !caption_finalize_interval.is_zero() => {
+                        println!("Finalizing live caption segment...");
+                        if let Err(e) = send_message(&mut socket_write, json!({"action": "flush_continue"})).await {
+                            eprintln!("could not send live caption finalize action to socket: {}", e);
+                            ui_sender
+                                .send(UiAction::Disconnected(Some(e.to_string())))
+                                .await
+                                .unwrap();
+                            break;
+                        }
+                        caption_finalize_tick = Some(Box::pin(tokio::time::sleep(caption_finalize_interval)));
+                    }
                     _ = connection_receiver.changed() => {
                         // Wait until we should disconnect
                         if *connection_receiver.borrow_and_update() == ConnectionState::Disconnected {
@@ -336,17 +353,31 @@ async fn handle_connection(
 async fn handle_hotkey(
     mut hotkey_receiver: mpsc::Receiver<HotkeyEvent>,
     connection_sender: watch::Sender<ConnectionState>,
+    capture_mode: CaptureMode,
 ) {
+    let mut live_caption_active = false;
+
     while let Some(event) = hotkey_receiver.recv().await {
-        match event {
-            HotkeyEvent::Pressed => {
+        match (capture_mode, event) {
+            (CaptureMode::PushToTalk, HotkeyEvent::Pressed) => {
                 let _ = connection_sender.send(ConnectionState::Connected);
                 // window will be hidden as soon as connection task is ready
             }
-            HotkeyEvent::Released => {
+            (CaptureMode::PushToTalk, HotkeyEvent::Released) => {
                 let _ = connection_sender.send(ConnectionState::Disconnected);
                 // window will be hidden as soon as transcription task is finished
             }
+            (CaptureMode::ToggleLiveCaption, HotkeyEvent::Pressed) => {
+                live_caption_active = !live_caption_active;
+                let state = if live_caption_active {
+                    ConnectionState::Connected
+                } else {
+                    ConnectionState::Disconnected
+                };
+                let _ = connection_sender.send(state);
+            }
+            (CaptureMode::ToggleLiveCaption, HotkeyEvent::Released) => {}
+            (CaptureMode::AlwaysOnLiveCaption, _) => {}
         }
     }
 }
@@ -383,6 +414,12 @@ fn apply_saved_overlay_config(opts: Command) -> Command {
         mut connection_opts,
         style,
         hotkey,
+        audio_source_kind,
+        audio_source,
+        capture_mode,
+        type_into_focused_app,
+        no_text_injection,
+        caption_finalize_interval,
     } = opts
     else {
         unreachable!("apply_saved_overlay_config is only used for the overlay command");
@@ -406,10 +443,44 @@ fn apply_saved_overlay_config(opts: Command) -> Command {
         hotkey
     };
 
+    let audio_source_kind =
+        if audio_source_kind == "microphone" && !config.audio.source_kind.is_empty() {
+            config.audio.source_kind
+        } else {
+            audio_source_kind
+        };
+
+    let audio_source = if audio_source == "default" && !config.audio.source_id.is_empty() {
+        config.audio.source_id
+    } else {
+        audio_source
+    };
+
+    let capture_mode = if capture_mode == "push-to-talk" && !config.audio.capture_mode.is_empty() {
+        config.audio.capture_mode
+    } else {
+        capture_mode
+    };
+
+    let type_into_focused_app = type_into_focused_app || config.caption.type_into_focused_app;
+    let caption_finalize_interval = if (caption_finalize_interval - 6.0).abs() < f64::EPSILON
+        && config.caption.finalize_interval_seconds > 0.0
+    {
+        config.caption.finalize_interval_seconds
+    } else {
+        caption_finalize_interval
+    };
+
     Command::Overlay {
         connection_opts,
         style,
         hotkey,
+        audio_source_kind,
+        audio_source,
+        capture_mode,
+        type_into_focused_app,
+        no_text_injection,
+        caption_finalize_interval,
     }
 }
 
@@ -434,10 +505,41 @@ fn build_ui(app: &Application, opts: Command) {
     let Command::Overlay {
         connection_opts,
         hotkey,
+        audio_source_kind,
+        audio_source,
+        capture_mode,
+        type_into_focused_app,
+        no_text_injection,
+        caption_finalize_interval,
         ..
     } = opts
     else {
         panic!("build_ui() got invalid command options");
+    };
+
+    let capture_mode = CaptureMode::parse(&capture_mode).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        CaptureMode::PushToTalk
+    });
+    let audio_source_kind = AudioSourceKind::parse(&audio_source_kind).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        AudioSourceKind::Microphone
+    });
+    let audio_config = AudioCaptureConfig {
+        source_kind: audio_source_kind,
+        source_id: audio_source,
+    };
+    let type_final_text = if no_text_injection {
+        false
+    } else if capture_mode == CaptureMode::PushToTalk {
+        true
+    } else {
+        type_into_focused_app
+    };
+    let caption_finalize_interval = if caption_finalize_interval <= 0.0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs_f64(caption_finalize_interval)
     };
 
     let main_box = gtk::Box::builder()
@@ -504,14 +606,27 @@ fn build_ui(app: &Application, opts: Command) {
     window.present();
 
     let (ui_sender, mut ui_receiver) = mpsc::channel(64);
-    let (connection_sender, connection_receiver) = watch::channel(ConnectionState::Disconnected);
+    let initial_connection_state = if capture_mode == CaptureMode::AlwaysOnLiveCaption {
+        ConnectionState::Connected
+    } else {
+        ConnectionState::Disconnected
+    };
+    let (connection_sender, connection_receiver) = watch::channel(initial_connection_state);
     let (hotkey_sender, hotkey_receiver) = mpsc::channel(64);
     let (virtual_keyboard_sender, virtual_keyboard_receiver) = mpsc::channel(64);
 
     // Spawn connection manager
     runtime().spawn(
         glib::clone!(@strong connection_receiver, @strong ui_sender => async move {
-            handle_connection(connection_receiver, ui_sender, connection_opts.clone()).await;
+            handle_connection(
+                connection_receiver,
+                ui_sender,
+                connection_opts.clone(),
+                audio_config,
+                capture_mode,
+                caption_finalize_interval,
+            )
+            .await;
         }),
     );
 
@@ -522,7 +637,7 @@ fn build_ui(app: &Application, opts: Command) {
 
     // Spawn hotkey processor
     runtime().spawn(glib::clone!(@strong connection_sender => async move {
-        handle_hotkey(hotkey_receiver, connection_sender).await;
+        handle_hotkey(hotkey_receiver, connection_sender, capture_mode).await;
     }));
 
     spawn_virtual_keyboard(virtual_keyboard_receiver).expect("Failed to spawn virutal keyboard");
@@ -606,7 +721,7 @@ fn build_ui(app: &Application, opts: Command) {
 
                             // Add line to history if we have a result
                             if res.kind == "result" {
-                                if !to_type.is_empty() {
+                                if type_final_text && !to_type.is_empty() {
                                     let _ = virtual_keyboard_sender.send(to_type).await;
                                 }
                                 if !line_markup.is_empty() {

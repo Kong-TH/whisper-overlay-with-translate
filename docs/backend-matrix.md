@@ -106,6 +106,26 @@ WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --
 podman compose up --build
 ```
 
+The repository also includes a Podman CDI override that passes the GPU device
+into the service:
+
+```bash
+WHISPER_OVERLAY_SERVER_COMMAND="python3 realtime-stt-server.py --host 0.0.0.0 --device cuda --model medium --model-realtime small" \
+podman compose -f docker-compose.yml -f docker-compose.podman-gpu.yml up --build
+```
+
+Use `medium` plus `small` as a conservative first CUDA profile for 8 GB GPUs.
+If it is stable, try a larger final model; if the container is killed or CUDA
+runs out of memory, move back down to `small` or `base`.
+
+Confirm CUDA usage from the server startup log:
+
+```text
+INFO RealtimeSTT settings: device=cuda model=medium realtime_model=small language=auto
+INFO AudioToTextRecorder ready
+INFO Server ready to accept connections
+```
+
 nerdctl Compose:
 
 ```bash
@@ -187,6 +207,40 @@ podman run --rm --device nvidia.com/gpu=all -p 7007:7007 -v whisper-overlay-cach
   python3 realtime-stt-server.py --host 0.0.0.0 --device cuda
 ```
 
+Before running the project image, test GPU visibility with the NVIDIA CUDA
+runtime image:
+
+```bash
+podman run --rm --device nvidia.com/gpu=all --security-opt=label=disable docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+```
+
+If that command fails before printing the GPU table, the host driver may be
+working but Podman still does not have a CDI device. Generate the CDI definition
+after installing NVIDIA Container Toolkit:
+
+```bash
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+```
+
+Then retry the `podman run --device nvidia.com/gpu=all ... nvidia-smi` test.
+
+On openSUSE, NVIDIA publishes the toolkit packages from the CUDA repository. A
+typical setup is:
+
+```bash
+sudo zypper addrepo https://developer.download.nvidia.com/compute/cuda/repos/suse16/x86_64/ cuda
+sudo zypper refresh
+sudo zypper install -y nvidia-container-toolkit
+```
+
+The package may create the `nvidia-cdi-refresh` systemd units and regenerate the
+CDI file during installation. Confirm before starting the speech server:
+
+```bash
+nvidia-ctk cdi list
+podman run --rm --device nvidia.com/gpu=all --security-opt=label=disable docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+```
+
 ## Runtime Diagnostics
 
 The server logs the selected backend, task, language, and target language at startup.
@@ -235,3 +289,13 @@ If startup fails with `ModuleNotFoundError: No module named 'requests'` while
 importing `faster_whisper`, rebuild with the current Dockerfile. Some
 RealtimeSTT requirement sets do not pull `requests` explicitly, so the container
 targets install it after the upstream requirements file.
+
+If `nvidia-smi` works on the host but the container prints `WARNING: The NVIDIA
+Driver was not detected`, the GPU driver is installed correctly on the host but
+was not passed into the container. Fix the Podman/Docker GPU runtime setup first;
+changing `--device cuda` alone is not enough.
+
+If the container resolves the CDI device but prints `Failed to initialize NVML:
+Insufficient Permissions`, add `--security-opt=label=disable` to the Podman
+command. NVIDIA documents this as the fix for SELinux-style labeling preventing
+the container from using host driver files.
