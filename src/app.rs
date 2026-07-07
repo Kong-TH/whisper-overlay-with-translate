@@ -195,6 +195,9 @@ async fn handle_connection(
             *audio_active.lock().expect("Could not lock audio stop") = true;
 
             let mut shutdown_timer: Option<JoinHandle<()>> = None;
+            let mut live_caption_finalize_in_flight = false;
+            let live_caption_resume_timeout = Duration::from_millis(1200);
+            let mut live_caption_resume_tick = None::<std::pin::Pin<Box<tokio::time::Sleep>>>;
             let mut caption_finalize_tick =
                 if capture_mode == CaptureMode::PushToTalk || caption_finalize_interval.is_zero() {
                     None
@@ -228,6 +231,14 @@ async fn handle_connection(
 
                                 if is_model_result {
                                     if message.get("kind") == Some(&json!("result")) {
+                                        if live_caption_finalize_in_flight {
+                                            live_caption_finalize_in_flight = false;
+                                            *audio_active.lock().expect("Could not lock audio stop") = true;
+                                            live_caption_resume_tick = None;
+                                            caption_finalize_tick = Some(Box::pin(tokio::time::sleep(caption_finalize_interval)));
+                                            println!("Live caption segment finalized, resuming audio capture.");
+                                        }
+
                                         // A final result means the server finished processing the flush request.
                                         if let Some(ref timer) = shutdown_timer {
                                             timer.abort();
@@ -277,17 +288,37 @@ async fn handle_connection(
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if capture_mode != CaptureMode::PushToTalk && !caption_finalize_interval.is_zero() => {
+                    }, if capture_mode != CaptureMode::PushToTalk && !caption_finalize_interval.is_zero() && !live_caption_finalize_in_flight => {
                         println!("Finalizing live caption segment...");
+                        // RealtimeSTT cannot keep a stable live-caption timeline if audio keeps
+                        // entering the recorder while the final model is closing the segment.
+                        *audio_active.lock().expect("Could not lock audio stop") = false;
+                        let _ = std::mem::take(&mut *bytes.lock().expect("Could not lock mutex to clear audio data"));
+                        live_caption_finalize_in_flight = true;
                         if let Err(e) = send_message(&mut socket_write, json!({"action": "flush_continue"})).await {
                             eprintln!("could not send live caption finalize action to socket: {}", e);
+                            *audio_active.lock().expect("Could not lock audio stop") = true;
                             ui_sender
                                 .send(UiAction::Disconnected(Some(e.to_string())))
                                 .await
                                 .unwrap();
                             break;
                         }
+                        caption_finalize_tick = None;
+                        live_caption_resume_tick = Some(Box::pin(tokio::time::sleep(live_caption_resume_timeout)));
+                    }
+                    _ = async {
+                        if let Some(tick) = live_caption_resume_tick.as_mut() {
+                            tick.as_mut().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if live_caption_finalize_in_flight => {
+                        live_caption_finalize_in_flight = false;
+                        *audio_active.lock().expect("Could not lock audio stop") = true;
+                        live_caption_resume_tick = None;
                         caption_finalize_tick = Some(Box::pin(tokio::time::sleep(caption_finalize_interval)));
+                        println!("Live caption finalize timed out, resuming audio capture.");
                     }
                     _ = connection_receiver.changed() => {
                         // Wait until we should disconnect
@@ -295,6 +326,8 @@ async fn handle_connection(
                             println!("Done, notifying server to finish...");
                             // Pause audio thread
                             *audio_active.lock().expect("Could not lock audio stop") = false;
+                            live_caption_finalize_in_flight = false;
+                            live_caption_resume_tick = None;
 
                             // Don't disconnect immediately, instead instruct the server to flush
                             if let Err(e) = send_message(&mut socket_write, json!({"action": "flush"})).await {
@@ -322,6 +355,8 @@ async fn handle_connection(
                             }
                             // Restart audio thread
                             *audio_active.lock().expect("Could not lock audio stop") = true;
+                            live_caption_finalize_in_flight = false;
+                            live_caption_resume_tick = None;
                             println!("Staying connected due to user request...");
                         }
                     }

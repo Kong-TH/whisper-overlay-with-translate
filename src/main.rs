@@ -61,6 +61,22 @@ fn main() -> Result<()> {
                 );
             }
         }
+        cli::Command::RecordAudio {
+            audio_source_kind,
+            audio_source,
+            seconds,
+            output,
+        } => {
+            let source_kind = audio::AudioSourceKind::parse(&audio_source_kind)?;
+            audio::record_audio_to_wav(
+                audio::AudioCaptureConfig {
+                    source_kind,
+                    source_id: audio_source,
+                },
+                std::time::Duration::from_secs_f64(seconds.max(0.1)),
+                &output,
+            )?;
+        }
     }
 
     Ok(())

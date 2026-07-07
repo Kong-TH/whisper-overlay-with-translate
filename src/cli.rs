@@ -20,6 +20,23 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         probe: bool,
     },
+    RecordAudio {
+        /// Audio source kind to capture for the diagnostic WAV.
+        #[arg(long, default_value = "desktop-output")]
+        audio_source_kind: String,
+
+        /// Audio source id or device name. Use `whisper-overlay audio-sources --probe` to find it.
+        #[arg(long, default_value = "default")]
+        audio_source: String,
+
+        /// Seconds of audio to record.
+        #[arg(long, default_value_t = 30.0)]
+        seconds: f64,
+
+        /// Output WAV file path.
+        #[arg(long, default_value = "whisper-overlay-capture.wav")]
+        output: PathBuf,
+    },
     Overlay {
         #[clap(flatten)]
         connection_opts: ConnectionOpts,

@@ -168,6 +168,22 @@ Sources with `peak_rms` close to `0.0000` are effectively silent during the
 probe window. Start playback first, then run the probe again to find the monitor
 source that carries desktop audio.
 
+Record the exact source path that the overlay would use before debugging model
+accuracy or caption timing:
+
+```bash
+whisper-overlay record-audio \
+  --audio-source-kind desktop-output \
+  --audio-source "pulse:easyeffects_sink.monitor" \
+  --seconds 30 \
+  --output capture.wav
+```
+
+The diagnostic file is written as 16 kHz mono PCM WAV, matching the stream sent
+to the speech server. Listen to this file first. If it is muffled, delayed,
+silent, or contains the wrong application, fix the selected audio source before
+tuning models or caption timing.
+
 The default capture mode is microphone push-to-talk dictation. The settings UI
 shows user-facing audio choices such as Microphone, Desktop audio, Speaker/output,
 and Application audio, then filters the device dropdown for that choice.

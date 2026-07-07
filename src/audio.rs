@@ -2,7 +2,9 @@ use color_eyre::eyre::{bail, Context, ContextCompat, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SampleRate, SizedSample, StreamConfig, SupportedStreamConfig};
 use serde_json::Value;
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -141,6 +143,41 @@ pub fn probe_audio_source(source: &AudioSourceDescriptor) -> Result<f32> {
     }
 
     Ok(0.0)
+}
+
+pub fn record_audio_to_wav(
+    config: AudioCaptureConfig,
+    duration: Duration,
+    output: &Path,
+) -> Result<()> {
+    if config.source_kind == AudioSourceKind::Application {
+        bail!("Per-application audio capture is not available through the current audio backend");
+    }
+
+    let samples = if matches!(
+        config.source_kind,
+        AudioSourceKind::DesktopOutput | AudioSourceKind::OutputDevice
+    ) {
+        let source_name = select_pulse_source_name(&config)?.with_context(|| {
+            "Desktop audio recording requires a PulseAudio/PipeWire monitor source. \
+             Run `whisper-overlay audio-sources --probe`, play audio, then select a source starting with `pulse:`."
+        })?;
+        record_pulse_samples(&source_name, duration)?
+    } else {
+        record_cpal_samples(&config, duration)?
+    };
+
+    let peak = pcm_rms(&samples);
+    write_wav_i16_mono(output, TARGET_SAMPLE_RATE, &samples)
+        .with_context(|| format!("Could not write WAV file to {}", output.display()))?;
+    println!(
+        "Recorded {:.2}s to {} ({} samples, peak_rms={:.4})",
+        duration.as_secs_f64(),
+        output.display(),
+        samples.len(),
+        peak
+    );
+    Ok(())
 }
 
 pub fn spawn_audio_capture(
@@ -376,6 +413,44 @@ fn run_pulse_capture(
     Ok(())
 }
 
+fn record_pulse_samples(source_name: &str, duration: Duration) -> Result<Vec<i16>> {
+    println!("Recording source: {source_name} [pulse monitor] 16000 Hz, 1 channel(s), I16");
+    let target_bytes = duration_to_target_bytes(duration);
+    let mut child = Command::new("parec")
+        .args([
+            "--raw",
+            "--format=s16le",
+            "--rate=16000",
+            "--channels=1",
+            "--device",
+            source_name,
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Could not start parec for source {source_name}"))?;
+    let mut stdout = child.stdout.take().context("parec stdout was not piped")?;
+    let mut bytes = Vec::with_capacity(target_bytes);
+    let mut buffer = vec![0_u8; 4096];
+
+    while bytes.len() < target_bytes {
+        let read = stdout
+            .read(&mut buffer)
+            .with_context(|| format!("Could not read audio from parec source {source_name}"))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    bytes.truncate(target_bytes);
+    if bytes.len() % 2 != 0 {
+        bytes.pop();
+    }
+    Ok(bytemuck::cast_slice::<u8, i16>(&bytes).to_vec())
+}
+
 fn probe_pulse_source(source_name: &str) -> Result<f32> {
     let mut child = Command::new("parec")
         .args([
@@ -410,6 +485,52 @@ fn probe_pulse_source(source_name: &str) -> Result<f32> {
     let _ = child.kill();
     let _ = child.wait();
     Ok(peak)
+}
+
+fn record_cpal_samples(config: &AudioCaptureConfig, duration: Duration) -> Result<Vec<i16>> {
+    let host = cpal::default_host();
+    let device =
+        select_input_device(&host, config).context("Could not select an audio capture device")?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "unknown input".to_string());
+    let supported_config = select_supported_config(&device)
+        .with_context(|| format!("Could not find a supported input config for {device_name}"))?;
+
+    println!(
+        "Recording source: {} [{}] {} Hz, {} channel(s), {:?}",
+        device_name,
+        config.source_kind.as_str(),
+        supported_config.sample_rate().0,
+        supported_config.channels(),
+        supported_config.sample_format()
+    );
+
+    let target_samples = duration_to_target_samples(duration);
+    let samples = Arc::new(Mutex::new(Vec::<i16>::with_capacity(target_samples)));
+    let stream = build_record_stream(&device, &supported_config, samples.clone(), target_samples)?;
+    stream.play().context("Failed to start audio stream")?;
+
+    let deadline = Instant::now() + duration + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if samples
+            .lock()
+            .expect("Could not lock recorded sample buffer")
+            .len()
+            >= target_samples
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    drop(stream);
+    let mut samples = samples
+        .lock()
+        .expect("Could not lock recorded sample buffer")
+        .clone();
+    samples.truncate(target_samples);
+    Ok(samples)
 }
 
 fn select_input_device(host: &cpal::Host, config: &AudioCaptureConfig) -> Result<Device> {
@@ -479,6 +600,85 @@ fn select_supported_config(device: &Device) -> Result<SupportedStreamConfig> {
     }
 
     best.context("Device does not report any supported input config")
+}
+
+fn build_record_stream(
+    device: &Device,
+    supported_config: &SupportedStreamConfig,
+    samples: Arc<Mutex<Vec<i16>>>,
+    target_samples: usize,
+) -> Result<cpal::Stream> {
+    let stream_config: StreamConfig = supported_config.clone().into();
+    let channels = stream_config.channels as usize;
+    let input_rate = stream_config.sample_rate.0;
+    let err_fn = move |err| eprintln!("an error occurred on the audio stream: {err}");
+
+    match supported_config.sample_format() {
+        SampleFormat::I16 => build_typed_record_stream::<i16>(
+            device,
+            &stream_config,
+            channels,
+            input_rate,
+            samples,
+            target_samples,
+            err_fn,
+        ),
+        SampleFormat::U16 => build_typed_record_stream::<u16>(
+            device,
+            &stream_config,
+            channels,
+            input_rate,
+            samples,
+            target_samples,
+            err_fn,
+        ),
+        SampleFormat::F32 => build_typed_record_stream::<f32>(
+            device,
+            &stream_config,
+            channels,
+            input_rate,
+            samples,
+            target_samples,
+            err_fn,
+        ),
+        other => bail!("Unsupported input sample format: {other:?}"),
+    }
+}
+
+fn build_typed_record_stream<T>(
+    device: &Device,
+    stream_config: &StreamConfig,
+    channels: usize,
+    input_rate: u32,
+    samples: Arc<Mutex<Vec<i16>>>,
+    target_samples: usize,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: SizedSample + AudioSample + Send + 'static,
+{
+    let mut normalizer = AudioNormalizer::new(channels, input_rate, TARGET_SAMPLE_RATE);
+    device
+        .build_input_stream(
+            stream_config,
+            move |data: &[T], _: &_| {
+                let mut pcm = Vec::new();
+                normalizer.push(data, &mut pcm);
+                if pcm.is_empty() {
+                    return;
+                }
+
+                let mut samples = samples.lock().expect("Could not lock sample buffer");
+                if samples.len() >= target_samples {
+                    return;
+                }
+                let remaining = target_samples - samples.len();
+                samples.extend(pcm.into_iter().take(remaining));
+            },
+            err_fn,
+            None,
+        )
+        .context("Failed to build audio input stream")
 }
 
 fn build_input_stream(
@@ -639,6 +839,38 @@ impl AudioSample for f32 {
 
 fn f32_to_i16(value: f32) -> i16 {
     (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
+}
+
+fn duration_to_target_samples(duration: Duration) -> usize {
+    (duration.as_secs_f64() * TARGET_SAMPLE_RATE as f64).ceil() as usize
+}
+
+fn duration_to_target_bytes(duration: Duration) -> usize {
+    duration_to_target_samples(duration) * std::mem::size_of::<i16>()
+}
+
+fn write_wav_i16_mono(path: &Path, sample_rate: u32, samples: &[i16]) -> Result<()> {
+    let data_bytes = samples.len() as u32 * 2;
+    let riff_size = 36_u32
+        .checked_add(data_bytes)
+        .context("WAV file is too large")?;
+    let mut file = File::create(path)?;
+
+    file.write_all(b"RIFF")?;
+    file.write_all(&riff_size.to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+    file.write_all(b"fmt ")?;
+    file.write_all(&16_u32.to_le_bytes())?;
+    file.write_all(&1_u16.to_le_bytes())?;
+    file.write_all(&1_u16.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&(sample_rate * 2).to_le_bytes())?;
+    file.write_all(&2_u16.to_le_bytes())?;
+    file.write_all(&16_u16.to_le_bytes())?;
+    file.write_all(b"data")?;
+    file.write_all(&data_bytes.to_le_bytes())?;
+    file.write_all(bytemuck::cast_slice(samples))?;
+    Ok(())
 }
 
 fn pcm_rms(pcm: &[i16]) -> f32 {
